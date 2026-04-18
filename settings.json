@@ -1,0 +1,23 @@
+{
+    "face_auth_enabled": true,
+    "tool_permissions": {
+        "generate_cad": false,
+        "run_web_agent": false,
+        "write_file": false,
+        "read_directory": false,
+        "read_file": false,
+        "create_project": false,
+        "switch_project": false,
+        "list_projects": false,
+        "create_directory": true,
+        "iterate_cad": true,
+        "print_stl": true,
+        "discover_printers": true,
+        "control_light": true,
+        "list_smart_devices": true
+    },
+    "printers": [],
+    "kasa_devices": [],
+    "camera_flipped": false,
+    "audio_mode": "speaker"
+}

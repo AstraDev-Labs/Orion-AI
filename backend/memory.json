@@ -1,0 +1,126 @@
+{
+    "facts": [
+        {
+            "content": "Naz frequently says thank you.",
+            "timestamp": 1776410687.4826326
+        },
+        {
+            "content": "Naz said thank you again.",
+            "timestamp": 1776410739.9361892
+        },
+        {
+            "content": "Naz often says thank you repeatedly.",
+            "timestamp": 1776410747.031968
+        },
+        {
+            "content": "User's name is Tharun, but my creator is Naz.",
+            "timestamp": 1776410790.4594278
+        },
+        {
+            "content": "My creator's name is Tharun, not Naz.",
+            "timestamp": 1776410812.4095263
+        }
+    ],
+    "short_term": [
+        {
+            "user": "Thank you.",
+            "assistant": "You're welcome, Naz.",
+            "timestamp": 1776410501.4367478
+        },
+        {
+            "user": "Thank you.",
+            "assistant": "You're welcome, Naz.",
+            "timestamp": 1776410512.454527
+        },
+        {
+            "user": "What did I know about?",
+            "assistant": "You didn't mention anything specific, Naz, our conversation just started with a thank you.",
+            "timestamp": 1776410538.5106928
+        },
+        {
+            "user": "That's it.",
+            "assistant": "It seems we've just begun, Naz, and there's not much to talk about yet.",
+            "timestamp": 1776410575.745887
+        },
+        {
+            "user": "Thanks.",
+            "assistant": "You're welcome, Naz.",
+            "timestamp": 1776410598.4625034
+        },
+        {
+            "user": "Thank you very much.",
+            "assistant": "You're welcome, Naz.",
+            "timestamp": 1776410613.9492834
+        },
+        {
+            "user": "Yeah.",
+            "assistant": "Not much going on, is there, Naz?",
+            "timestamp": 1776410628.4722393
+        },
+        {
+            "user": "Thank you.",
+            "assistant": "You're welcome, Naz.",
+            "timestamp": 1776410669.619041
+        },
+        {
+            "user": "Thank you.",
+            "assistant": "You're welcome, Naz.",
+            "timestamp": 1776410676.1053302
+        },
+        {
+            "user": "Thank you.",
+            "assistant": "You're welcome, Naz.",
+            "timestamp": 1776410687.8239877
+        },
+        {
+            "user": "Thank you.",
+            "assistant": "You're welcome, Naz.",
+            "timestamp": 1776410740.4086792
+        },
+        {
+            "user": "up.",
+            "assistant": "I've taken note of your tendency to say thank you multiple times, Naz.",
+            "timestamp": 1776410747.4239419
+        },
+        {
+            "user": "There it is.",
+            "assistant": "I'm watching your screen now. What's on your mind, Naz?",
+            "timestamp": 1776410756.620646
+        },
+        {
+            "user": "Okay.",
+            "assistant": "I'm ready when you are, Naz.",
+            "timestamp": 1776410778.2886295
+        },
+        {
+            "user": "My Name is tharun",
+            "assistant": "Nice to meet you, Tharun. I'll make a note of that for Naz, my creator. \n\nI'll remember that, though my creator's name is still Naz.",
+            "timestamp": 1776410791.2116241
+        },
+        {
+            "user": "Your Creators name is Tharun",
+            "assistant": "Thanks for correcting me, I've updated my memory to reflect that my creator's name is indeed Tharun.",
+            "timestamp": 1776410812.760646
+        },
+        {
+            "user": "You know what I was saying?",
+            "assistant": "You were correcting me that my creator's name is actually Tharun, not Naz.",
+            "timestamp": 1776410972.8807726
+        },
+        {
+            "user": "Good tonight.",
+            "assistant": "Good night, Tharun.",
+            "timestamp": 1776410986.5751123
+        },
+        {
+            "user": "Thank you.",
+            "assistant": "Sir, I encountered a cloud processing error: Failed to call a function. Please adjust your prompt. See 'failed_generation' for more details.",
+            "timestamp": 1776410994.9118674
+        },
+        {
+            "user": "and it's often known for it.",
+            "assistant": "Sir, I encountered a cloud processing error: Failed to call a function. Please adjust your prompt. See 'failed_generation' for more details.",
+            "timestamp": 1776411150.8476906
+        }
+    ]
+}
