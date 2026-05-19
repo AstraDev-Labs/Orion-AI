@@ -1,5 +1,7 @@
 # Orion AI- Advanced Assistant
 
+# NOTE: THE TOTAL PROJECT IS OF 3.2GB APPROX SO MAKE SURE YOU HAVE REQUIRED SPACE AND ALSO TO DOWNLOAD LOCAL MODELS OF OLLAMA TO WORK WITH IT.
+
 ![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11-blue?logo=python)
 ![React](https://img.shields.io/badge/React-18.2-61DAFB?logo=react)
 ![Electron](https://img.shields.io/badge/Electron-28-47848F?logo=electron)
