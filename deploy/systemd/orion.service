@@ -1,0 +1,15 @@
+[Unit]
+Description=Orion API Server
+After=network.target
+
+[Service]
+Type=simple
+User=orion
+WorkingDirectory=/opt/orion
+ExecStart=/opt/orion/.venv/bin/orion serve --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/opt/orion
+
+[Install]
+WantedBy=multi-user.target

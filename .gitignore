@@ -1,0 +1,123 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# uv
+# Note: uv.lock is intentionally tracked — it pins all transitive deps for reproducibility.
+# Uncomment the line below only if you deliberately choose not to commit the lock file.
+# uv.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.*
+
+# Project
+*.sqlite
+*.db
+*.jsonl
+*.npz
+*.log
+results/
+logs/
+traces/
+coding_task_*
+get-pip.py
+# Junk from mocked-path tests that write to their mock's __repr__ as a path
+MagicMock/
+
+# MkDocs build output
+site/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Desktop
+desktop/node_modules/
+desktop/dist/
+src/orion/server/static/
+
+# Desktop (Tauri)
+frontend/src-tauri/target/
+
+# Worktrees
+.worktrees/
+
+# Rust
+target/
+
+# Claude plan artifacts
+docs/plans/
+docs/superpowers/
+.superpowers/
+
+# Claude Code project instructions (per-developer)
+CLAUDE.md
+.claude/
+
+# Tauri auto-generated schemas
+**/src-tauri/gen/schemas/
+
+# NFS lock artifacts
+.nfs*
+**/.nfs*
+
+# Research output
+research_mining_*
+.python-version
+src/orion/channels/whatsapp_baileys_bridge/node_modules/
+
+# SQLite in-memory artifacts
+:memory:
+
+# Dogfood reports (regenerated locally; not for VCS)
+dogfood_report*.md
+
+# Second Repos
+Inline/
+scratch/
+
+# ---------------------------------------------------------------------------
+# Distillation runtime artifacts (defense in depth — these should always live
+# in ~/.orion/, never inside the source tree, but we ignore them here in
+# case OPENORION_HOME is misconfigured during dev)
+# ---------------------------------------------------------------------------
+.orion/
+learning.db
+**/learning/sessions/
+**/learning/pending_review/
+**/learning/benchmarks/
+**/teacher_traces/
+*.session.json
+*.gguf
+*.zip
+orion_lora_model/

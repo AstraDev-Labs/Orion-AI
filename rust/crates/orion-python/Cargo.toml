@@ -1,0 +1,32 @@
+[package]
+name = "orion-python"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "orion_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+orion-core = { path = "../orion-core" }
+orion-engine = { path = "../orion-engine" }
+orion-security = { path = "../orion-security" }
+orion-tools = { path = "../orion-tools" }
+orion-agents = { path = "../orion-agents" }
+orion-traces = { path = "../orion-traces" }
+orion-telemetry = { path = "../orion-telemetry" }
+orion-learning = { path = "../orion-learning" }
+orion-mcp = { path = "../orion-mcp" }
+orion-sessions = { path = "../orion-sessions" }
+orion-workflow = { path = "../orion-workflow" }
+orion-skills = { path = "../orion-skills" }
+orion-recipes = { path = "../orion-recipes" }
+orion-templates = { path = "../orion-templates" }
+orion-a2a = { path = "../orion-a2a" }
+orion-scheduler = { path = "../orion-scheduler" }
+pyo3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }

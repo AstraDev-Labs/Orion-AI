@@ -1,0 +1,20 @@
+[package]
+name = "orion-agents"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+orion-core = { path = "../orion-core" }
+orion-engine = { path = "../orion-engine" }
+orion-tools = { path = "../orion-tools" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+sha2 = { workspace = true }
+once_cell = { workspace = true }
+parking_lot = { workspace = true }
+rig-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }

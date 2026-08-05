@@ -1,0 +1,242 @@
+name: Desktop Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+      - 'desktop-v*'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v1.0.2.dev500). If set, autotag dispatches use this. github.ref still controls the checkout.'
+        required: false
+        type: string
+
+concurrency:
+  group: desktop-${{ inputs.tag || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: TypeScript type-check
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'frontend/src-tauri -> target'
+
+      - name: Create frontend dist stub
+        run: mkdir -p frontend/dist && echo '<html><body></body></html>' > frontend/dist/index.html
+
+      - name: Cargo check
+        working-directory: frontend/src-tauri
+        run: cargo check
+
+  # Remove stale artifacts from the desktop-latest pre-release so that
+  # only the current build's files are available for download.
+  clean-release:
+    needs: [validate]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old assets from desktop-latest
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="desktop-latest"
+          # List all asset IDs on the release and delete them
+          ASSET_IDS=$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}" \
+            --jq '.assets[].id' 2>/dev/null || true)
+          for id in $ASSET_IDS; do
+            echo "Deleting asset $id"
+            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" || true
+          done
+
+  build-and-release:
+    needs: [validate, clean-release]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: macos-14
+            args: '--target universal-apple-darwin'
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install system dependencies (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libxdo-dev
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-14' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'frontend/src-tauri -> target'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install
+
+      - name: Download Ollama sidecar
+        shell: bash
+        run: |
+          cd frontend/src-tauri/scripts && chmod +x download-ollama.sh
+          if [[ "${{ matrix.platform }}" == "macos-14" ]]; then
+            ./download-ollama.sh aarch64-apple-darwin
+            ./download-ollama.sh x86_64-apple-darwin
+          else
+            ./download-ollama.sh
+          fi
+
+      - name: Determine release info
+        id: release-info
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/desktop-v* ]]; then
+            # Explicit stable desktop release tag
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#desktop-v}"
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "name=Desktop ${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # Auto-tagged rolling build from autotag.yml — use the same
+            # version as the CLI/PyPI release so all surfaces stay in sync.
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+            echo "tag=desktop-latest" >> "$GITHUB_OUTPUT"
+            echo "name=Desktop (Latest Build)" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            # workflow_dispatch fallback (manual UI dispatch without --ref).
+            # Derive a PEP 440 dev version aligned with autotag.yml so we
+            # don't burn the X.Y.Z release-version namespace.
+            BASE=$(grep -E '^version = "' pyproject.toml | head -1 | sed -E 's/^version = "([^"]+)"/\1/')
+            MAJOR=$(echo "$BASE" | cut -d. -f1)
+            MINOR=$(echo "$BASE" | cut -d. -f2)
+            PATCH=$(echo "$BASE" | cut -d. -f3 | sed -E 's/[^0-9].*$//')
+            NEXT_PATCH=$((PATCH + 1))
+            BUILD=$(git rev-list --count HEAD)
+            VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}.dev${BUILD}"
+            echo "tag=desktop-latest" >> "$GITHUB_OUTPUT"
+            echo "name=Desktop (Latest Build)" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Tauri's build script requires strict SemVer (MAJOR.MINOR.PATCH[-pre][+build]).
+          # PEP 440 dev releases (`1.0.2.dev661`) are NOT valid SemVer, so we
+          # translate `.devN` to the SemVer-equivalent `-dev.N` prerelease form.
+          # PyPI keeps the PEP 440 form; only the Tauri bundle uses SemVer.
+          TAURI_VERSION="${VERSION/.dev/-dev.}"
+          echo "tauri_version=${TAURI_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure Apple signing
+        if: runner.os == 'macOS'
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          CERT_PASS: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SIGN_ID: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          A_ID: ${{ secrets.APPLE_ID }}
+          A_PASS: ${{ secrets.APPLE_PASSWORD }}
+          A_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          if [ -n "$CERT" ]; then
+            echo "APPLE_CERTIFICATE=$CERT" >> "$GITHUB_ENV"
+            echo "APPLE_CERTIFICATE_PASSWORD=$CERT_PASS" >> "$GITHUB_ENV"
+            echo "APPLE_SIGNING_IDENTITY=$SIGN_ID" >> "$GITHUB_ENV"
+            echo "APPLE_ID=$A_ID" >> "$GITHUB_ENV"
+            echo "APPLE_PASSWORD=$A_PASS" >> "$GITHUB_ENV"
+            echo "APPLE_TEAM_ID=$A_TEAM" >> "$GITHUB_ENV"
+            echo "Apple signing configured"
+          else
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              echo "::error::Apple signing secrets are required for release builds"
+              exit 1
+            fi
+            echo "No Apple certificate configured, skipping code signing"
+          fi
+
+      - name: Build and release
+        timeout-minutes: 120
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_CONFIG: '{"version":"${{ steps.release-info.outputs.tauri_version }}","bundle":{"externalBin":["binaries/ollama"]}}'
+        with:
+          projectPath: frontend
+          tauriScript: npx tauri
+          tagName: ${{ steps.release-info.outputs.tag }}
+          releaseName: ${{ steps.release-info.outputs.name }}
+          releaseBody: 'Desktop application built from ${{ github.sha }}'
+          releaseDraft: false
+          prerelease: ${{ steps.release-info.outputs.prerelease }}
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}
