@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from orion.server.analytics_routes import router as analytics_router
 from orion.server.api_routes import include_all_routes
 from orion.server.comparison import comparison_router
+from orion.server.config_routes import router as config_router
 from orion.server.connectors_router import create_connectors_router
 from orion.server.dashboard import dashboard_router
 from orion.server.digest_routes import create_digest_router
@@ -283,6 +284,7 @@ def create_app(
         logger.debug("Analytics init skipped: %s", _exc)
 
     app.include_router(router)
+    app.include_router(config_router)
     app.include_router(dashboard_router)
     app.include_router(comparison_router)
     app.include_router(create_connectors_router())
