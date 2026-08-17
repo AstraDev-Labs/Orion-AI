@@ -933,6 +933,62 @@ export async function getMemoryConfig(): Promise<MemoryConfig> {
 }
 
 // ---------------------------------------------------------------------------
+// Settings / config
+// ---------------------------------------------------------------------------
+
+export interface AvailableModel {
+  id: string;
+  engine: string;
+}
+
+export interface OrionSettings {
+  model: string;
+  engine: string;
+  temperature: number;
+  max_tokens: number;
+  obsidian_dir: string;
+  learning_enabled: boolean;
+  available_models: AvailableModel[];
+}
+
+export interface OrionSettingsUpdate {
+  model?: string;
+  engine?: string;
+  temperature?: number;
+  max_tokens?: number;
+  obsidian_dir?: string;
+  learning_enabled?: boolean;
+}
+
+export interface OrionSettingsUpdateResult {
+  status: string;
+  updated: string[];
+  engine_reloaded: boolean;
+  reload_error: string | null;
+}
+
+export async function fetchSettings(): Promise<OrionSettings> {
+  const res = await fetch(`${getBase()}/v1/config`);
+  if (!res.ok) throw new Error(`Failed to fetch settings: ${res.status}`);
+  return res.json();
+}
+
+export async function updateSettings(
+  update: OrionSettingsUpdate,
+): Promise<OrionSettingsUpdateResult> {
+  const res = await fetch(`${getBase()}/v1/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Failed to update settings: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard API endpoints
 // ---------------------------------------------------------------------------
 

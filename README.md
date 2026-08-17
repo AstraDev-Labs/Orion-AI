@@ -25,6 +25,9 @@
 
 ## Why Orion?
 
+> **⚠️ Important Note on Project Scale & Storage**  
+> Orion is a large-scale project designed for advanced on-device AI. To ensure stability and correct behavior, **you must use the given models provided in the configuration**. Please be aware that because these are **local models** designed to run entirely on your own hardware, they require **huge amounts of local storage** and substantial computational resources.
+
 Personal AI agents are exploding in popularity, but nearly all of them still route intelligence through cloud APIs. Your "personal" AI continues to depend on someone else's server. At the same time, our [Intelligence Per Watt](https://www.intelligence-per-watt.ai/) research showed that local language models already handle 88.7% of single-turn chat and reasoning queries, with intelligence efficiency improving 5.3× from 2023 to 2025. The models and hardware are increasingly ready. What has been missing is the software stack to make local-first personal AI practical.
 
 Orion is that stack. It is a framework for local-first personal AI, built around three core ideas: shared primitives for building on-device agents; evaluations that treat energy, FLOPs, latency, and dollar cost as first-class constraints alongside accuracy; and a learning loop that improves models using local trace data. The goal is simple: make it possible to build personal AI agents that run locally by default, calling the cloud only when truly necessary. Orion aims to be both a research platform and a production foundation for local AI, in the spirit of PyTorch.
