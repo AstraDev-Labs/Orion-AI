@@ -1,5 +1,6 @@
 ---
 import SiteLayout from '../layouts/SiteLayout.astro';
+import ProfileLinks, { type Profile } from '../components/ProfileLinks.astro';
 import { CONTACT_EMAIL, REPO_URL, url } from '../lib/site';
 
 const owner = {
@@ -8,26 +9,38 @@ const owner = {
   roles: ['Developer', 'Product owner'],
   bio: [
     'Tharun created Orion and builds all of it: the AI agent runtime, voice, memory and tools, the Windows desktop app and installer, and this website.',
-    'As the product owner he sets Orion’s direction, decides what goes into each release, and keeps it true to its core promise: an assistant that runs on your own computer and acts only with your approval.',
+    'As product owner, Tharun sets Orion’s direction, decides what goes into each release, and keeps it true to its core promise: an assistant that runs on your own computer and acts only with your approval.',
   ],
-  github: 'https://github.com/TharunG2006',
+  profiles: [
+    { kind: 'github', href: 'https://github.com/TharunG2006' },
+    { kind: 'linkedin', href: 'https://www.linkedin.com/in/tharun-g-b5b53a260/' },
+  ] as Profile[],
 };
 
-const team = [
+const team: Array<{ name: string; initials: string; bio: string; profiles: Profile[] }> = [
   {
     name: 'Sanjay A.',
     initials: 'SA',
     bio: 'Helps bring Orion to new people and looks at each release with a security-first eye.',
+    profiles: [
+      { kind: 'github', href: 'https://github.com/sanjaynec' },
+      { kind: 'linkedin', href: 'https://www.linkedin.com/in/sanjay-a-3b7ba9322/' },
+    ],
   },
   {
     name: 'Yogaraj S.',
     initials: 'YS',
     bio: 'Shares Orion with the community and checks that its privacy promises hold up in practice.',
+    profiles: [
+      { kind: 'github', href: 'https://github.com/Yogaraj02' },
+      { kind: 'linkedin', href: 'https://www.linkedin.com/in/yoga-raj-618aa3321/' },
+    ],
   },
   {
     name: 'Raghavan P.',
     initials: 'RP',
     bio: 'Spreads the word about Orion and helps audit how it protects people’s data and accounts.',
+    profiles: [{ kind: 'linkedin', href: 'https://www.linkedin.com/in/raghavan-p-347423310/' }],
   },
 ];
 
@@ -56,8 +69,18 @@ const schema = {
   name: 'Orion AI',
   url: Astro.site ? new URL(url('/'), Astro.site).href : undefined,
   email: CONTACT_EMAIL,
-  founder: { '@type': 'Person', name: owner.name, jobTitle: 'Developer and Product Owner' },
-  member: team.map((m) => ({ '@type': 'Person', name: m.name, jobTitle: 'Marketing & Security Audit' })),
+  founder: {
+    '@type': 'Person',
+    name: owner.name,
+    jobTitle: 'Developer and Product Owner',
+    sameAs: owner.profiles.map((p) => p.href),
+  },
+  member: team.map((m) => ({
+    '@type': 'Person',
+    name: m.name,
+    jobTitle: 'Marketing & Security Audit',
+    sameAs: m.profiles.map((p) => p.href),
+  })),
 };
 ---
 
@@ -88,11 +111,8 @@ const schema = {
           <div class="mt-5 space-y-3 text-[1.02rem] leading-relaxed text-[var(--color-muted)]">
             {owner.bio.map((p) => <p>{p}</p>)}
           </div>
-          <div class="mt-6 flex flex-wrap gap-3">
-            <a href={owner.github} class="btn btn-ghost">
-              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2.1c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.2 1.9 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.7 1.7.3 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0 0 12 .5Z" /></svg>
-              GitHub
-            </a>
+          <div class="mt-6 flex flex-wrap items-center gap-3">
+            <ProfileLinks name={owner.name} profiles={owner.profiles} variant="buttons" />
             <a href={REPO_URL} class="btn btn-ghost">Orion on GitHub</a>
           </div>
         </div>
@@ -118,7 +138,10 @@ const schema = {
                 <p class="text-sm text-[var(--color-cyan-soft)]">Marketing &amp; Security Audit</p>
               </div>
             </div>
-            <p class="mt-4 text-[0.97rem] leading-relaxed text-[var(--color-muted)]">{member.bio}</p>
+            <p class="mt-4 flex-1 text-[0.97rem] leading-relaxed text-[var(--color-muted)]">{member.bio}</p>
+            <div class="mt-5">
+              <ProfileLinks name={member.name} profiles={member.profiles} />
+            </div>
           </li>
         ))
       }
