@@ -1,9 +1,7 @@
-name: Deploy website
+name: Website
 
-# Builds the Astro site in website/ and publishes it to GitHub Pages.
-# One-time setup: Settings → Pages → Source: "GitHub Actions". To deploy from a
-# branch other than the default one, allow that branch under
-# Settings → Environments → github-pages → Deployment branches.
+# Checks that the Astro site in website/ builds. The site itself is deployed
+# by Vercel (project root directory: website).
 
 on:
   push:
@@ -18,12 +16,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
 
 jobs:
   build:
@@ -45,24 +37,3 @@ jobs:
 
       - name: Build site
         run: npm run build
-        env:
-          SITE_URL: https://${{ github.repository_owner }}.github.io
-          BASE_PATH: /${{ github.event.repository.name }}
-
-      - name: Upload artifact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v5.0.0
-        with:
-          path: website/dist/
-
-  deploy:
-    if: github.event_name != 'pull_request'
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5

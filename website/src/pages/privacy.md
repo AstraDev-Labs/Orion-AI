@@ -43,4 +43,4 @@ Orion is local-first. It has no accounts, sends no usage analytics, and processe
 
 ## Changes and contact
 
-This policy may change with new versions of Orion; the current version ships with every install as *Terms and Privacy.txt*. Questions or concerns: [open an issue on GitHub](https://github.com/AstraDev-Labs/Orion-AI/issues).
+This policy may change with new versions of Orion; the current version ships with every install as *Terms and Privacy.txt*. Questions or concerns: email [orionai.offl@gmail.com](mailto:orionai.offl@gmail.com) or [open an issue on GitHub](https://github.com/AstraDev-Labs/Orion-AI/issues).

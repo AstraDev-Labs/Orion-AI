@@ -1,6 +1,6 @@
 ---
 import SiteLayout from '../layouts/SiteLayout.astro';
-import { url } from '../lib/site';
+import { CONTACT_EMAIL, url } from '../lib/site';
 ---
 
 <SiteLayout title="Press kit" description="Orion logo, banner and a short description for articles, videos and posts.">
@@ -39,6 +39,7 @@ import { url } from '../lib/site';
         <li><strong>Platform:</strong> Windows 10 and 11 (64-bit)</li>
         <li><strong>Price:</strong> Free, open source (Apache 2.0)</li>
         <li><strong>Status:</strong> Alpha</li>
+        <li><strong>Press contact:</strong> <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></li>
         <li><strong>Source:</strong> <a href="https://github.com/AstraDev-Labs/Orion-AI">github.com/AstraDev-Labs/Orion-AI</a></li>
       </ul>
     </div>

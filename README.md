@@ -18,10 +18,10 @@
   </p>
 
   <p>
-    <a href="https://astradev-labs.github.io/Orion-AI/">Website</a> ·
-    <a href="https://astradev-labs.github.io/Orion-AI/download">Download</a> ·
-    <a href="https://astradev-labs.github.io/Orion-AI/system-requirements">Check your PC</a> ·
-    <a href="https://astradev-labs.github.io/Orion-AI/docs">Docs</a>
+    <a href="https://github.com/AstraDev-Labs/Orion-AI/releases">Download</a> ·
+    <a href="#system-requirements">Requirements</a> ·
+    <a href="#privacy">Privacy</a> ·
+    <a href="mailto:orionai.offl@gmail.com">Contact</a>
   </p>
 </div>
 
@@ -43,7 +43,7 @@ Most "personal" AI assistants send every request through someone else's servers.
 
 ## Download and install
 
-1. Download **`OrionSetup-<version>.exe`** from [GitHub Releases](https://github.com/AstraDev-Labs/Orion-AI/releases) or the [website](https://astradev-labs.github.io/Orion-AI/download).
+1. Download **`OrionSetup-<version>.exe`** from [GitHub Releases](https://github.com/AstraDev-Labs/Orion-AI/releases) or the Orion website.
 2. Run it. The alpha installer isn't code-signed yet, so Windows SmartScreen shows *"Windows protected your PC"*. Choose **More info → Run anyway**.
 3. Accept the terms, choose an install folder and features, and click **Install**.
 4. Orion opens and finishes setting itself up: the AI engine, a model sized to your PC's memory, and voice. This takes roughly 5 to 20 minutes, then Orion greets you.
@@ -61,7 +61,7 @@ No administrator rights are needed. Updates arrive in the app: Orion notifies yo
 | **Graphics** | Not required | NVIDIA GPU with 4 GB+ |
 | **Internet** | Required during setup | Broadband |
 
-Not sure? The [compatibility check](https://astradev-labs.github.io/Orion-AI/system-requirements) tests the PC you're on, right in your browser. macOS and Linux have no installer yet; you can [build from source](#build-from-source).
+Not sure? The system requirements page on the Orion website checks the PC you're on, right in your browser. macOS and Linux have no installer yet; you can [build from source](#build-from-source).
 
 ## Privacy
 
@@ -71,7 +71,7 @@ Not sure? The [compatibility check](https://astradev-labs.github.io/Orion-AI/sys
 - A cloud AI is used only if you add its API key yourself, and personal details it can recognise are removed first.
 - No analytics, no tracking, no Orion servers.
 
-Read the full [privacy policy](https://astradev-labs.github.io/Orion-AI/privacy) and [terms of use](https://astradev-labs.github.io/Orion-AI/terms).
+The full terms of use and privacy policy are in [installer/windows/terms-and-privacy.txt](installer/windows/terms-and-privacy.txt) and on the Orion website.
 
 > [!CAUTION]
 > Orion's WhatsApp connection uses an unofficial WhatsApp Web client. WhatsApp doesn't endorse it, and using it may break WhatsApp's terms and put your account at risk.
@@ -111,13 +111,13 @@ powershell -ExecutionPolicy Bypass -File installer\build-windows.ps1
 | `rust/` | `orion_rust`, a compiled extension for performance-critical paths |
 | `frontend/` | React HUD and the Tauri 2 desktop app (`frontend/src-tauri`) |
 | `installer/` | Inno Setup installer plus the PowerShell setup and uninstall scripts |
-| `website/` | The Orion website (Astro), deployed to GitHub Pages |
+| `website/` | The Orion website (Astro + Starlight), deployed on Vercel |
 | `tests/` | Test suite |
 | `docs/` | Developer documentation |
 
 ## Contributing
 
-Bug reports, ideas and pull requests are welcome. See the [contributing guide](CONTRIBUTING.md).
+Bug reports, ideas and pull requests are welcome. See the [contributing guide](CONTRIBUTING.md). For anything else, email [orionai.offl@gmail.com](mailto:orionai.offl@gmail.com).
 
 ```bash
 uv sync --extra dev

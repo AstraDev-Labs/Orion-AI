@@ -48,4 +48,4 @@ These terms may change with new versions of Orion. The current version is includ
 
 ## Contact
 
-Orion is built by Tharun. Questions: [open an issue on GitHub](https://github.com/AstraDev-Labs/Orion-AI/issues).
+Orion is built by Tharun. Questions: email [orionai.offl@gmail.com](mailto:orionai.offl@gmail.com) or [open an issue on GitHub](https://github.com/AstraDev-Labs/Orion-AI/issues).

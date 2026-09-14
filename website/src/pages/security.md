@@ -39,4 +39,4 @@ Orion checks GitHub for new versions. It installs an update only if the file car
 
 ## Reporting a vulnerability
 
-Please report security problems privately through GitHub's **[private vulnerability reporting](https://github.com/AstraDev-Labs/Orion-AI/security/advisories/new)** rather than a public issue, with steps to reproduce. You'll get a reply as soon as possible.
+Please report security problems privately through GitHub's **[private vulnerability reporting](https://github.com/AstraDev-Labs/Orion-AI/security/advisories/new)** rather than a public issue, with steps to reproduce, or email [orionai.offl@gmail.com](mailto:orionai.offl@gmail.com) with "Security" in the subject. You'll get a reply as soon as possible.

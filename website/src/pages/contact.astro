@@ -1,6 +1,6 @@
 ---
 import SiteLayout from '../layouts/SiteLayout.astro';
-import { ISSUES_URL, NEW_ISSUE_URL, REPO_URL, url } from '../lib/site';
+import { CONTACT_EMAIL, ISSUES_URL, NEW_ISSUE_URL, REPO_URL, url } from '../lib/site';
 
 const options = [
   {
@@ -22,8 +22,8 @@ const options = [
     cta: 'Report privately',
   },
   {
-    title: 'Anything else',
-    body: 'Questions, feedback, press or collaboration: open an issue and it will be answered there.',
+    title: 'Browse known issues',
+    body: 'See whether a problem is already reported, and follow its fix.',
     href: ISSUES_URL,
     cta: 'Browse issues',
   },
@@ -35,8 +35,17 @@ const options = [
     <p class="eyebrow">Contact</p>
     <h1 class="display mt-4 text-4xl font-bold text-white sm:text-5xl">Get in touch</h1>
     <p class="mt-5 max-w-2xl text-lg text-[var(--color-muted)]">
-      Orion is developed in the open on GitHub, which is the fastest way to reach the developer and track a fix.
+      Questions, feedback, press or collaboration: email Orion. For bugs and ideas, GitHub is the fastest way to track a fix.
     </p>
+
+    <a href={`mailto:${CONTACT_EMAIL}`} class="panel mt-10 flex flex-wrap items-center justify-between gap-4 p-6 transition-colors hover:border-[var(--color-line-strong)]">
+      <span>
+        <span class="eyebrow">Email</span>
+        <span class="mt-2 block text-xl font-semibold text-white sm:text-2xl">{CONTACT_EMAIL}</span>
+        <span class="mt-1 block text-sm text-[var(--color-muted)]">Replies usually within a few days. Please don’t send passwords or keys.</span>
+      </span>
+      <span class="btn btn-primary">Send an email</span>
+    </a>
     <div class="mt-10 grid gap-5 sm:grid-cols-2">
       {
         options.map((o) => (
@@ -48,6 +57,6 @@ const options = [
         ))
       }
     </div>
-    <p class="mt-10 text-sm text-[var(--color-faint)]">Replying needs a free GitHub account. Before reporting, check the <a class="text-[var(--color-cyan-soft)] underline" href={url('/faq')}>FAQ</a> and <a class="text-[var(--color-cyan-soft)] underline" href={url('/docs/troubleshooting')}>troubleshooting guide</a>.</p>
+    <p class="mt-10 text-sm text-[var(--color-faint)]">GitHub issues need a free GitHub account. Before reporting, check the <a class="text-[var(--color-cyan-soft)] underline" href={url('/faq')}>FAQ</a> and <a class="text-[var(--color-cyan-soft)] underline" href={url('/docs/troubleshooting')}>troubleshooting guide</a>.</p>
   </section>
 </SiteLayout>

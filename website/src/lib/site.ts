@@ -6,6 +6,9 @@ export const RELEASES_URL = `${REPO_URL}/releases`;
 export const ISSUES_URL = `${REPO_URL}/issues`;
 export const NEW_ISSUE_URL = `${REPO_URL}/issues/new`;
 
+/** Orion's public contact address. */
+export const CONTACT_EMAIL = 'orionai.offl@gmail.com';
+
 export const VERSION = '1.0.1';
 export const STAGE = 'Alpha';
 

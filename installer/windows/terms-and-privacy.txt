@@ -107,4 +107,5 @@ conversations are processed on your own computer by default.
 
 5. Contact
 Orion is built by Tharun. Questions or concerns:
+orionai.offl@gmail.com
 https://github.com/AstraDev-Labs/Orion-AI/issues

@@ -5,10 +5,12 @@ import starlight from '@astrojs/starlight';
 import tailwindcss from '@tailwindcss/vite';
 import { satteri } from '@astrojs/markdown-satteri';
 
-// Where the site is published. Defaults to GitHub Pages for the repository;
-// set SITE_URL (and BASE_PATH="/" ) when moving to a custom domain.
-const site = process.env.SITE_URL || 'https://astradev-labs.github.io';
-const base = process.env.BASE_PATH ?? '/Orion-AI';
+// Where the site is published (Vercel). SITE_URL wins, so set it in the Vercel
+// project once a custom domain is attached; otherwise Vercel's production
+// domain is used. BASE_PATH is only needed when serving from a sub-folder.
+const vercelDomain = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+const site = process.env.SITE_URL || (vercelDomain ? `https://${vercelDomain}` : 'http://localhost:4321');
+const base = process.env.BASE_PATH || '/';
 const basePrefix = base.replace(/\/$/, '');
 
 /** Markdown links like `/terms` point at the site root; prefix them with the base path. */
@@ -32,7 +34,7 @@ const baseLinks = {
 export default defineConfig({
   site,
   base,
-  trailingSlash: 'ignore',
+  trailingSlash: 'never',
   markdown: { processor: satteri({ hastPlugins: [baseLinks] }) },
   integrations: [
     react(),

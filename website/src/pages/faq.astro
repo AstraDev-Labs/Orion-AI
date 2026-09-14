@@ -15,6 +15,7 @@ const faqs: Array<[string, string]> = [
   ['How do I update?', 'Orion checks for updates and notifies you. Choose Update now in the app or the tray menu; it installs and reopens by itself.'],
   ['How do I uninstall?', 'Use Windows Settings → Apps → Orion → Uninstall. You’ll be asked what to remove, including the AI models and your personal data.'],
   ['Where do I report a bug?', 'On <a href="ISSUES">GitHub Issues</a>. Include what you did, what happened, and your setup log if setup failed.'],
+  ['How do I contact the developer?', 'Email <a href="mailto:orionai.offl@gmail.com">orionai.offl@gmail.com</a>, or use the <a href="CONTACT">contact page</a>.'],
 ];
 
 const replace = (html: string) =>
@@ -22,6 +23,7 @@ const replace = (html: string) =>
     .replace('PRIVACY', url('/privacy'))
     .replace('ROADMAP', url('/roadmap'))
     .replace('TROUBLESHOOTING', url('/docs/troubleshooting'))
+    .replace('CONTACT', url('/contact'))
     .replace('ISSUES', 'https://github.com/AstraDev-Labs/Orion-AI/issues');
 
 const schema = {

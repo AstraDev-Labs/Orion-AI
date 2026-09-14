@@ -1,7 +1,7 @@
 ---
 import { Image } from 'astro:assets';
 import logo from '../assets/orion-logo.png';
-import { FOOTER, REPO_URL, STAGE, VERSION, url } from '../lib/site';
+import { CONTACT_EMAIL, FOOTER, REPO_URL, STAGE, VERSION, url } from '../lib/site';
 const year = new Date().getFullYear();
 ---
 
@@ -39,7 +39,10 @@ const year = new Date().getFullYear();
   <div class="border-t border-[var(--color-line)]">
     <div class="container-site flex flex-wrap items-center justify-between gap-3 py-5 text-xs text-[var(--color-faint)]">
       <span>© {year} Orion AI · Built by Tharun · Open source under the Apache License 2.0</span>
-      <a href={REPO_URL} class="hover:text-white">GitHub</a>
+      <span class="flex gap-5">
+        <a href={`mailto:${CONTACT_EMAIL}`} class="hover:text-white">{CONTACT_EMAIL}</a>
+        <a href={REPO_URL} class="hover:text-white">GitHub</a>
+      </span>
     </div>
   </div>
 </footer>
