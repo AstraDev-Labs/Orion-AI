@@ -131,7 +131,7 @@ class GmailChannel(BaseChannel):
         except ImportError:
             logger.warning(
                 "Google API libraries not installed; "
-                "install with: pip install orion[channel-gmail]",
+                "install with: uv sync --extra channel-gmail",
             )
             self._status = ChannelStatus.ERROR
         except Exception:

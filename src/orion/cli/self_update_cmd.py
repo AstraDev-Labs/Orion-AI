@@ -2,9 +2,13 @@
 
 Runs the right upgrade command for how the user installed Orion:
 
-- PyPI installs get ``pip install --upgrade orion``.
-- uv-tool installs get ``uv tool upgrade orion``.
+- Windows installer copies are pointed at the app's own signed updater
+  (or the latest installer); nothing is run.
 - Editable git checkouts get ``git pull && uv sync`` in the checkout.
+- uv-tool installs get ``uv tool upgrade orion``.
+- pip installs from git re-install from the repository.
+
+Orion is not on PyPI, so ``pip install orion`` is never run.
 
 The detection logic is shared with the post-command "new version
 available" hint in ``_version_check.py`` so both surfaces stay in sync.
@@ -26,9 +30,9 @@ from orion.cli._install_detect import detect_install
     "self-update",
     help=(
         "Upgrade Orion to the latest release. Detects how you "
-        "installed (pip, uv tool, editable git) and runs the right "
-        "command. Use --check to only print the upgrade command "
-        "without running it."
+        "installed (Windows installer, editable git, uv tool, pip from "
+        "git) and runs the right command. Use --check to only print the "
+        "upgrade command without running it."
     ),
 )
 @click.option(
@@ -48,18 +52,17 @@ def self_update(check: bool, yes: bool) -> None:
 
     click.echo(f"Current Orion version: v{current}")
     click.echo(f"Install method: {info.kind}")
+
+    if info.upgrade_command is None:
+        # Windows installer, or an install we can't identify: there is no
+        # command we can safely run on the user's behalf.
+        click.echo(f"How to update: {info.upgrade_hint}")
+        return
+
     click.echo(f"Upgrade command: {info.upgrade_command}")
 
     if check:
         return
-
-    if info.kind == "unknown":
-        click.echo(
-            "\nCould not determine install method with confidence. The "
-            "command above is a best guess; verify it matches how you "
-            "installed before running.",
-            err=True,
-        )
 
     if not yes:
         if not click.confirm("\nRun the upgrade command now?", default=True):

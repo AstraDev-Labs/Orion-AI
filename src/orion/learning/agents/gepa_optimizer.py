@@ -183,7 +183,7 @@ class GEPAAgentOptimizer:
             return {
                 "status": "error",
                 "reason": (
-                    "gepa not installed (pip install 'orion[learning-gepa]')"
+                    "gepa not installed (uv sync --extra learning-gepa)"
                 ),
             }
 
