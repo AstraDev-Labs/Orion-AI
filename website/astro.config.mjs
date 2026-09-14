@@ -8,8 +8,22 @@ import { satteri } from '@astrojs/markdown-satteri';
 // Where the site is published (Vercel). SITE_URL wins, so set it in the Vercel
 // project once a custom domain is attached; otherwise Vercel's production
 // domain is used. BASE_PATH is only needed when serving from a sub-folder.
-const vercelDomain = process.env.VERCEL_PROJECT_PRODUCTION_URL;
-const site = process.env.SITE_URL || (vercelDomain ? `https://${vercelDomain}` : 'http://localhost:4321');
+const vercelDomain = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+const publicSite = process.env.SITE_URL || (vercelDomain ? `https://${vercelDomain}` : '');
+const isBuild = process.argv.includes('build');
+if (isBuild && !publicSite) {
+  // Without a public address, canonical links, social previews, the sitemap
+  // and robots.txt would point at localhost on the live site.
+  throw new Error(
+    'The website needs its public address to build. Set SITE_URL (for example ' +
+      'https://orion-ai.vercel.app), or on Vercel keep "Automatically expose System ' +
+      'Environment Variables" turned on.',
+  );
+}
+if (publicSite && /localhost|127\.0\.0\.1/.test(publicSite)) {
+  throw new Error(`SITE_URL must be the public website address, not ${publicSite}.`);
+}
+const site = publicSite || 'http://localhost:4321';
 const base = process.env.BASE_PATH || '/';
 const basePrefix = base.replace(/\/$/, '');
 
