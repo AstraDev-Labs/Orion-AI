@@ -29,15 +29,13 @@ def _clean_env(monkeypatch, tmp_path):
     monkeypatch.setattr(_version_check, "_CACHE_PATH", tmp_path / "version-check.json")
 
 
-def _pypi_response(
-    versions: dict[str, list] | None = None, info_version: str = ""
-) -> io.BytesIO:
-    """Build a minimal PyPI JSON payload."""
-    payload = {
-        "info": {"version": info_version},
-        "releases": versions if versions is not None else {},
-    }
-    return io.BytesIO(json.dumps(payload).encode())
+def _releases_response(releases: list[dict]) -> io.BytesIO:
+    """Build a minimal GitHub ``/releases`` JSON payload."""
+    return io.BytesIO(json.dumps(releases).encode())
+
+
+def _release(tag: str, *, draft: bool = False, prerelease: bool = False) -> dict:
+    return {"tag_name": tag, "draft": draft, "prerelease": prerelease}
 
 
 class _FakeResponse:
@@ -121,60 +119,63 @@ class TestConfigDisabled:
 
 
 class TestFetchLatestStable:
-    def test_picks_highest_non_dev_release(self):
-        body = _pypi_response(
-            versions={
-                "1.0.0": [{}],
-                "1.0.1": [{}],
-                "1.0.2.dev500": [{}],
-                "1.0.2.dev499": [{}],
-            },
-            info_version="1.0.2.dev500",  # PyPI's "latest upload" may be a dev
+    def test_picks_highest_stable_tag(self):
+        body = _releases_response(
+            [
+                _release("v1.0.0"),
+                _release("v1.0.1"),
+                _release("v1.0.3.dev5"),
+            ]
         )
         with patch(
             "urllib.request.urlopen", return_value=_FakeResponse(body.getvalue())
         ):
             assert _fetch_latest_stable() == "1.0.1"
 
-    def test_returns_info_version_when_no_stable(self):
-        body = _pypi_response(
-            versions={"1.0.0.dev1": [{}]},
-            info_version="1.0.0.dev1",
+    def test_ignores_drafts_prereleases_and_non_version_tags(self):
+        body = _releases_response(
+            [
+                _release("v2.0.0", draft=True),
+                _release("v1.5.0", prerelease=True),
+                _release("desktop-latest", prerelease=True),
+                _release("v1.1.0rc1"),
+                _release("v1.0.1"),
+            ]
         )
         with patch(
             "urllib.request.urlopen", return_value=_FakeResponse(body.getvalue())
         ):
-            # No stable release yet — fall back to info.version so we still
-            # report *something* rather than silently returning None.
-            assert _fetch_latest_stable() == "1.0.0.dev1"
+            assert _fetch_latest_stable() == "1.0.1"
 
-    def test_skips_invalid_version_strings(self):
-        body = _pypi_response(
-            versions={
-                "1.0.0": [{}],
-                "garbage-version": [{}],
-                "1.1.0": [{}],
-            },
-            info_version="1.1.0",
-        )
+    def test_no_releases_returns_none(self):
+        body = _releases_response([])
         with patch(
             "urllib.request.urlopen", return_value=_FakeResponse(body.getvalue())
         ):
-            assert _fetch_latest_stable() == "1.1.0"
+            assert _fetch_latest_stable() is None
+
+    def test_error_payload_returns_none(self):
+        body = io.BytesIO(json.dumps({"message": "API rate limit exceeded"}).encode())
+        with patch(
+            "urllib.request.urlopen", return_value=_FakeResponse(body.getvalue())
+        ):
+            assert _fetch_latest_stable() is None
 
     def test_network_error_returns_none(self):
         with patch("urllib.request.urlopen", side_effect=OSError("offline")):
             assert _fetch_latest_stable() is None
 
-    def test_filters_prereleases(self):
-        body = _pypi_response(
-            versions={"1.0.0": [{}], "1.1.0rc1": [{}], "1.1.0b2": [{}]},
-            info_version="1.1.0rc1",
-        )
+    def test_queries_github_not_pypi(self):
+        body = _releases_response([_release("v1.0.1")])
         with patch(
             "urllib.request.urlopen", return_value=_FakeResponse(body.getvalue())
-        ):
-            assert _fetch_latest_stable() == "1.0.0"
+        ) as mock_open:
+            _fetch_latest_stable()
+        request = mock_open.call_args.args[0]
+        assert request.full_url.startswith(
+            "https://api.github.com/repos/AstraDev-Labs/Orion-AI/releases"
+        )
+        assert "pypi" not in request.full_url
 
 
 class TestGetLatestVersion:
@@ -194,16 +195,16 @@ class TestGetLatestVersion:
         cache.write_text(
             json.dumps({"last_check": time.time() - 999_999, "latest_version": "0.0.1"})
         )
-        body = _pypi_response(versions={"1.2.3": [{}]}, info_version="1.2.3")
+        body = _releases_response([_release("v1.2.3")])
         with patch(
             "urllib.request.urlopen", return_value=_FakeResponse(body.getvalue())
         ):
             assert _get_latest_version("1.0.0") == "1.2.3"
 
     def test_empty_version_is_not_cached(self, tmp_path):
-        """An empty PyPI ``info.version`` must not poison the cache for 24h."""
+        """A release list with nothing stable must not poison the cache for 24h."""
         cache = _version_check._CACHE_PATH
-        body = _pypi_response(versions={}, info_version="")
+        body = _releases_response([])
         with patch(
             "urllib.request.urlopen", return_value=_FakeResponse(body.getvalue())
         ):
@@ -218,6 +219,21 @@ class TestGetLatestVersion:
         with patch("urllib.request.urlopen") as mock_open:
             assert _get_latest_version("1.0.0") is None
             mock_open.assert_not_called()
+
+
+class TestInstallerCopies:
+    def test_installer_copy_skips_the_check(self, monkeypatch):
+        """The desktop app owns updates for installer copies (tray toggle)."""
+        from orion.cli._install_detect import InstallInfo
+
+        info = InstallInfo(
+            kind="installer", upgrade_command=None, upgrade_hint="Update in the app"
+        )
+        monkeypatch.setattr("orion.cli._install_detect.detect_install", lambda: info)
+        assert _check_disabled() is True
+        with patch("orion.cli._version_check._do_check") as mock_do:
+            check_for_updates("serve")
+        mock_do.assert_not_called()
 
 
 class TestCheckForUpdates:

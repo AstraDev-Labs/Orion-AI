@@ -139,55 +139,15 @@ def _load_md_file(path: Path) -> str:
 def _extract_json_block(text: str) -> Optional[List[Dict[str, Any]]]:
     """Extract a JSON array from LLM output.
 
-    Tries (in order):
-      1. ```json ... ``` fenced block (preferred).
-      2. ``` ... ``` fenced block with no language tag.
-      3. First ``[ ... ]`` array in the raw text.
-
-    Returns the parsed list, or ``None`` if nothing parses.
+    Thin wrapper over ``orion.core.json_extract`` so this module and
+    ``learning/domain_research.py`` share one implementation. The shared
+    version uses ``JSONDecoder.raw_decode``, which -- unlike the hand-rolled
+    balanced-bracket scan this used to do -- parses brackets inside strings
+    correctly and tolerates text trailing the JSON value.
     """
-    import re
+    from orion.core.json_extract import extract_json_list
 
-    candidates: List[str] = []
-
-    # 1. ```json ... ``` (case-insensitive)
-    m = re.search(r"```(?:json|JSON)\s*(.*?)```", text, re.DOTALL)
-    if m:
-        candidates.append(m.group(1).strip())
-
-    # 2. Any ``` ... ``` block (model may omit the language tag)
-    for m in re.finditer(r"```\s*(.*?)```", text, re.DOTALL):
-        candidates.append(m.group(1).strip())
-
-    # 3. Raw top-level JSON array anywhere in the text (best-effort,
-    #    balanced-bracket walk so nested objects don't trip us up).
-    start = text.find("[")
-    while start != -1:
-        depth = 0
-        for i in range(start, len(text)):
-            ch = text[i]
-            if ch == "[":
-                depth += 1
-            elif ch == "]":
-                depth -= 1
-                if depth == 0:
-                    candidates.append(text[start : i + 1])
-                    break
-        next_start = text.find("[", start + 1)
-        if next_start == start:
-            break
-        start = next_start
-
-    for raw in candidates:
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, list):
-            return parsed  # type: ignore[return-value]
-        if isinstance(parsed, dict):
-            return [parsed]
-    return None
+    return extract_json_list(text)
 
 
 def _build_notification_channel(channel_spec: str) -> Optional[Any]:

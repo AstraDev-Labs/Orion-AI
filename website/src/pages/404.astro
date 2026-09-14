@@ -1,0 +1,16 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+import { url } from '../lib/site';
+---
+
+<SiteLayout title="Page not found" description="This page doesn't exist.">
+  <section class="container-site flex min-h-[60vh] flex-col items-center justify-center py-20 text-center">
+    <p class="display text-7xl font-bold text-[rgb(125_211_252/0.35)]">404</p>
+    <h1 class="mt-4 text-2xl font-semibold text-white">Lost in space</h1>
+    <p class="mt-3 text-[var(--color-muted)]">This page doesn’t exist, or it moved.</p>
+    <div class="mt-8 flex flex-wrap justify-center gap-3">
+      <a href={url('/')} class="btn btn-primary">Back home</a>
+      <a href={url('/docs')} class="btn btn-ghost">Documentation</a>
+    </div>
+  </section>
+</SiteLayout>

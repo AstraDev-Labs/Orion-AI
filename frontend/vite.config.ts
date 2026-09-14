@@ -4,6 +4,9 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// Set by the Tauri CLI while it runs beforeBuildCommand / beforeDevCommand.
+const isTauriBuild = Boolean(process.env.TAURI_ENV_PLATFORM);
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -15,6 +18,12 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
+      // The desktop app ships its interface inside the executable, so an
+      // offline cache only gets in the way: the service worker kept serving
+      // the previous version's interface after an install or update. Desktop
+      // builds get a worker that unregisters itself and deletes that cache,
+      // which also cleans up installs that already have the old one.
+      selfDestroying: isTauriBuild,
       manifest: {
         name: 'Orion',
         short_name: 'Orion',
@@ -44,6 +53,15 @@ export default defineConfig({
           markdown: ['react-markdown', 'rehype-highlight', 'remark-gfm'],
           charts: ['recharts'],
           router: ['react-router'],
+          // three + the R3F wrappers dominate the bundle and are only needed by
+          // the holo HUD. Splitting them keeps the entry chunk under workbox's
+          // 2 MiB precache limit (the PWA build failed outright once the entry
+          // crossed it) and stops every visitor downloading the 3D stack before
+          // the first paint.
+          three: ['three'],
+          fiber: ['@react-three/fiber', '@react-three/drei'],
+          vision: ['@mediapipe/tasks-vision'],
+          math: ['katex', 'rehype-katex', 'remark-math'],
         },
       },
     },

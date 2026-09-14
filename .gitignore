@@ -121,3 +121,30 @@ learning.db
 *.gguf
 *.zip
 orion_lora_model/
+
+# Signing keys - never commit. The Tauri updater private key lives
+# outside the repo (~/.orion/keys/) and reaches CI via the
+# TAURI_SIGNING_PRIVATE_KEY secret. A leaked key lets anyone publish an
+# update that installed apps accept as genuine.
+*.key
+*.pem
+
+# Personal notes vault used by the developer's own Orion (never public)
+ObsidianVault/
+
+# Generated knowledge graph of this codebase (graphify)
+graphify-out/
+
+# Installer build output (the .exe is published on GitHub Releases, not in git)
+installer/stage/
+installer/dist/
+
+# Model/benchmark experiments and local tool config
+results/
+.impeccable/config.local.json
+~/
+
+# Website build output
+website/node_modules/
+website/dist/
+website/.astro/

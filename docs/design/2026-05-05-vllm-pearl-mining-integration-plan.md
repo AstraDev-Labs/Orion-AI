@@ -2740,7 +2740,7 @@ def _detect_hardware() -> HardwareInfo:
 def mine() -> None:
     """Pearl PoUW mining commands.
 
-    See https://open-orion.github.io/Orion/user-guide/mining/ for the
+    See https://github.com/AstraDev-Labs/Orion-AIuser-guide/mining/ for the
     full guide.
     """
 

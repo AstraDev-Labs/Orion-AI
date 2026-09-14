@@ -158,8 +158,7 @@ class ACEAgentOptimizer:
             return {
                 "status": "error",
                 "reason": (
-                    "ace not installed (pip install "
-                    "'orion[learning-ace]')"
+                    "ace not installed (see docs/learning/ace.md for manual setup)"
                 ),
             }
 

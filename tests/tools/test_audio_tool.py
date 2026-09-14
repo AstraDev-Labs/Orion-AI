@@ -44,7 +44,7 @@ class TestAudioTranscribeTool:
         f = tmp_path / "audio.xyz"
         f.write_text("not audio", encoding="utf-8")
         tool = AudioTranscribeTool()
-        result = tool.execute(file_path=str(f))
+        result = tool.execute(file_path=str(f), provider="openai")
         assert result.success is False
         assert "Unsupported audio format" in result.content
 
@@ -62,17 +62,38 @@ class TestAudioTranscribeTool:
         large_stat.st_size = 26 * 1024 * 1024  # 26 MB
 
         with unittest.mock.patch("pathlib.Path.stat", return_value=large_stat):
-            result = tool.execute(file_path=str(f))
+            result = tool.execute(file_path=str(f), provider="openai")
         assert result.success is False
         assert "File too large" in result.content
 
-    def test_local_provider_not_implemented(self, tmp_path):
+    def test_local_provider_is_default_and_uses_speech_backend(self, tmp_path, monkeypatch):
         f = tmp_path / "audio.wav"
-        f.write_bytes(b"\x00" * 100)
-        tool = AudioTranscribeTool()
-        result = tool.execute(file_path=str(f), provider="local")
+        f.write_bytes(bytes(100))
+
+        class _Result:
+            text = "hello from the device"
+            language = "en"
+            duration_seconds = 1.5
+
+        class _Backend:
+            backend_id = "fake-whisper"
+
+            def transcribe(self, audio, *, format="wav", language=None):
+                return _Result()
+
+        monkeypatch.setattr("orion.speech._discovery.get_speech_backend", lambda config: _Backend())
+        result = AudioTranscribeTool().execute(file_path=str(f))
+        assert result.success is True
+        assert result.content == "hello from the device"
+        assert result.metadata["provider"] == "local:fake-whisper"
+
+    def test_local_provider_without_backend_explains(self, tmp_path, monkeypatch):
+        f = tmp_path / "audio.wav"
+        f.write_bytes(bytes(100))
+        monkeypatch.setattr("orion.speech._discovery.get_speech_backend", lambda config: None)
+        result = AudioTranscribeTool().execute(file_path=str(f), provider="local")
         assert result.success is False
-        assert "not yet implemented" in result.content
+        assert "speech" in result.content.lower()
 
     def test_unsupported_provider(self, tmp_path):
         f = tmp_path / "audio.mp3"
@@ -97,7 +118,7 @@ class TestAudioTranscribeTool:
         monkeypatch.setattr(builtins, "__import__", _mock_import)
 
         tool = AudioTranscribeTool()
-        result = tool.execute(file_path=str(f))
+        result = tool.execute(file_path=str(f), provider="openai")
         assert result.success is False
         assert "openai package not installed" in result.content
 
@@ -110,7 +131,7 @@ class TestAudioTranscribeTool:
         monkeypatch.setitem(sys.modules, "openai", mock_openai)
 
         tool = AudioTranscribeTool()
-        result = tool.execute(file_path=str(f))
+        result = tool.execute(file_path=str(f), provider="openai")
         assert result.success is False
         assert "No API key" in result.content
 
@@ -132,7 +153,7 @@ class TestAudioTranscribeTool:
         monkeypatch.setitem(sys.modules, "openai", mock_openai)
 
         tool = AudioTranscribeTool()
-        result = tool.execute(file_path=str(f))
+        result = tool.execute(file_path=str(f), provider="openai")
         assert result.success is True
         assert result.content == "Hello, this is a transcription."
         assert result.metadata["provider"] == "openai"
@@ -157,7 +178,7 @@ class TestAudioTranscribeTool:
         monkeypatch.setitem(sys.modules, "openai", mock_openai)
 
         tool = AudioTranscribeTool()
-        result = tool.execute(file_path=str(f), language="es")
+        result = tool.execute(file_path=str(f), language="es", provider="openai")
         assert result.success is True
         assert result.content == "Hola mundo."
         assert result.metadata["language"] == "es"
@@ -176,7 +197,7 @@ class TestAudioTranscribeTool:
         monkeypatch.setitem(sys.modules, "openai", mock_openai)
 
         tool = AudioTranscribeTool()
-        result = tool.execute(file_path=str(f))
+        result = tool.execute(file_path=str(f), provider="openai")
         assert result.success is False
         assert "Transcription error" in result.content
 

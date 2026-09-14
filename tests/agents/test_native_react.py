@@ -299,7 +299,7 @@ class TestNativeReActAgent:
         result = agent.run("Do something")
         assert len(result.tool_results) == 1
         assert result.tool_results[0].success is False
-        assert "Unknown tool" in result.tool_results[0].content
+        assert "No tool named" in result.tool_results[0].content
 
     def test_event_bus_emissions(self):
         """Verify AGENT_TURN_START and AGENT_TURN_END events."""

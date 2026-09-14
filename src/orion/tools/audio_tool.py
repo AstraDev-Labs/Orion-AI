@@ -19,7 +19,7 @@ class AudioTranscribeTool(BaseTool):
     """Transcribe audio files using OpenAI Whisper or a local provider."""
 
     tool_id = "audio_transcribe"
-    is_local = False
+    is_local = True
 
     @property
     def spec(self) -> ToolSpec:
@@ -43,8 +43,8 @@ class AudioTranscribeTool(BaseTool):
                     "provider": {
                         "type": "string",
                         "description": (
-                            "Transcription provider: 'openai' or 'local'."
-                            " Default 'openai'."
+                            "Transcription provider: 'local' (on-device Whisper, default)"
+                            " or 'openai' (cloud; the audio leaves this computer)."
                         ),
                     },
                 },
@@ -52,6 +52,44 @@ class AudioTranscribeTool(BaseTool):
             },
             category="media",
             required_capabilities=["file:read"],
+        )
+
+    @staticmethod
+    def _transcribe_local(path: Path, language: Any) -> ToolResult:
+        """Transcribe with the speech backend Orion uses for voice (on-device)."""
+        try:
+            from orion.core.config import load_config
+            from orion.speech._discovery import get_speech_backend
+
+            config = load_config()
+            backend = get_speech_backend(config)
+            if backend is None:
+                return ToolResult(
+                    tool_name="audio_transcribe",
+                    content=(
+                        "No local speech-to-text backend is available. Install it with "
+                        "`uv sync --extra speech`, or pass provider='openai' to use the cloud."
+                    ),
+                    success=False,
+                )
+            lang = language or getattr(getattr(config, "speech", None), "language", "") or None
+            result = backend.transcribe(path.read_bytes(), format=path.suffix.lstrip("."), language=lang)
+        except Exception as exc:
+            return ToolResult(
+                tool_name="audio_transcribe",
+                content=f"Local transcription failed: {exc}",
+                success=False,
+            )
+        return ToolResult(
+            tool_name="audio_transcribe",
+            content=result.text or "(no speech detected)",
+            success=bool(result.text),
+            metadata={
+                "file_path": str(path.resolve()),
+                "provider": f"local:{getattr(backend, 'backend_id', 'speech')}",
+                "language": result.language,
+                "duration_ms": int((result.duration_seconds or 0) * 1000),
+            },
         )
 
     def execute(self, **params: Any) -> ToolResult:
@@ -104,15 +142,11 @@ class AudioTranscribeTool(BaseTool):
                 success=False,
             )
 
-        provider = params.get("provider", "openai")
+        provider = params.get("provider") or "local"
         language = params.get("language")
 
         if provider == "local":
-            return ToolResult(
-                tool_name="audio_transcribe",
-                content="Local transcription provider is not yet implemented.",
-                success=False,
-            )
+            return self._transcribe_local(path, language)
 
         if provider != "openai":
             return ToolResult(

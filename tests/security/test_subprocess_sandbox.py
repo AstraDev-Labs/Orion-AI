@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
+from pathlib import Path
 
 from orion.security.subprocess_sandbox import (
     build_safe_env,
@@ -32,6 +34,13 @@ class TestBuildSafeEnv:
             "TMPDIR",
             "TZ",
         }
+        if sys.platform == "win32":
+            # Windows cannot resolve or launch anything without these
+            # (PATHEXT maps `python` -> `python.exe`, SYSTEMROOT is needed
+            # for DLL loading); build_safe_env adds them on that platform.
+            from orion.security.subprocess_sandbox import _WINDOWS_ENV_VARS
+
+            safe_keys = safe_keys | set(_WINDOWS_ENV_VARS)
         for key in env:
             assert key in safe_keys
 
@@ -71,16 +80,23 @@ class TestRunSandboxed:
         assert not result.killed
 
     def test_timeout_kills_process(self) -> None:
-        result = run_sandboxed("sleep 60", timeout=1.0)
+        # `sleep` is not a command on Windows; drive the delay through the
+        # running interpreter so the test means the same thing everywhere.
+        cmd = f'"{sys.executable}" -c "import time; time.sleep(60)"'
+        result = run_sandboxed(cmd, timeout=1.0)
         assert result.timed_out
         assert result.killed
         assert result.returncode == -1
 
     def test_working_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = run_sandboxed("pwd", working_dir=tmpdir, timeout=10.0)
+            # `pwd` is POSIX-only, and Windows shells report paths in a
+            # different form; ask the interpreter instead and compare
+            # resolved paths rather than raw strings.
+            cmd = f'"{sys.executable}" -c "import os; print(os.getcwd())"'
+            result = run_sandboxed(cmd, working_dir=tmpdir, timeout=30.0)
             assert result.returncode == 0
-            assert tmpdir in result.stdout.strip()
+            assert Path(result.stdout.strip()).resolve() == Path(tmpdir).resolve()
 
     def test_env_isolation(self) -> None:
         os.environ["TEST_SECRET"] = "super_secret_value"
@@ -97,7 +113,7 @@ class TestRunSandboxed:
     def test_output_truncation(self) -> None:
         # Generate output larger than max_output_bytes
         result = run_sandboxed(
-            "python3 -c \"print('A' * 200)\"",
+            f'"{sys.executable}" -c "print(chr(65) * 200)"',
             timeout=10.0,
             max_output_bytes=50,
         )

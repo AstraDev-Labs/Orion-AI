@@ -66,10 +66,22 @@ def check_bind_safety(host: str, *, api_key: str) -> None:
         is_loop = host in ("localhost", "")
 
     if not is_loop and not api_key:
-        logger.warning(
-            "Binding to %s without OPENORION_API_KEY. "
-            "Please be aware this exposes the server without auth. "
-            "Run: orion auth generate-key",
+        # Refuse, do not merely warn. Orion's tool surface includes
+        # shell_exec, file_write, code_interpreter, desktop_control and
+        # computer_control, so an unauthenticated non-loopback bind hands
+        # full control of this machine to anyone who can reach the port.
+        logger.error(
+            "Refusing to bind %s without an API key: this would expose "
+            "Orion's tools (shell, file write, desktop control) to the "
+            "network with no authentication.",
             host,
+        )
+        raise SystemExit(
+            f"Refusing to bind {host} without an API key.\n"
+            "Anyone who can reach this port would get unauthenticated "
+            "access to shell execution, file writes and desktop control.\n\n"
+            "Fix it with either:\n"
+            "  orion auth generate-key      # then re-run\n"
+            "  orion serve --host 127.0.0.1 # loopback only (default)"
         )
 

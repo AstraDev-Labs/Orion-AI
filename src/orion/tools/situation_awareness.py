@@ -128,25 +128,46 @@ class SituationAwarenessTool(BaseTool):
 
         now = datetime.datetime.now()
         date_str = now.strftime("%B %d, %Y")
-        queries: dict[str, str] = {}
+        # Short queries: search engines already rank news by recency, and the
+        # old "top news headlines today September 13, 2026 <City, Country>"
+        # matched nothing, so the briefing's news section was always empty.
+        # Each section falls back from the city to the country.
+        country = location.split(",")[-1].strip() if "," in location else location
+        queries: dict[str, list[str]] = {}
 
         if "news" in categories:
-            queries["📰 Top News"] = f"top news headlines today {date_str} {location}"
+            queries["📰 Top News"] = [f"{location} news", f"{country} news"]
+        live_weather_report = None
         if "weather" in categories:
-            queries["🌤️ Weather"] = f"current weather {location} today {date_str}"
+            from orion.tools.live_weather import live_weather
+
+            # Real numbers when the place resolves; search snippets otherwise.
+            live_weather_report = live_weather(location)
+            if not live_weather_report:
+                queries["🌤️ Weather"] = [f"weather {location} today", f"weather {country}"]
         if "tech" in categories:
-            queries["💻 Tech"] = f"technology news today {date_str}"
+            queries["💻 Tech"] = ["technology news"]
         if "sports" in categories:
-            queries["⚽ Sports"] = f"sports news today {date_str} {location}"
+            queries["⚽ Sports"] = [f"{country} sports news", "sports news"]
         if "markets" in categories:
-            queries["📈 Markets"] = f"stock market update today {date_str} India Sensex Nifty"
+            queries["📈 Markets"] = [f"{country} stock market today", "stock market today"]
+
+        def _first_with_results(candidates: list[str]) -> str:
+            last = ""
+            for q in candidates:
+                last = _search(q, self._api_key)
+                if not last.startswith(("No results", "Search unavailable")):
+                    return last
+            return last
 
         sections: list[str] = []
+        if live_weather_report:
+            sections.append(f"=== 🌤️ Weather ===\n{live_weather_report}")
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(queries)) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(queries))) as pool:
             future_map = {
-                pool.submit(_search, q, self._api_key): label
-                for label, q in queries.items()
+                pool.submit(_first_with_results, candidates): label
+                for label, candidates in queries.items()
             }
             results_ordered: dict[str, str] = {}
             for future in concurrent.futures.as_completed(future_map):

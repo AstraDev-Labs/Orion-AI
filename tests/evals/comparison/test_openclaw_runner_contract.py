@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.live_external
 def test_openclaw_runner_parses_real_agent_json_shape(tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:

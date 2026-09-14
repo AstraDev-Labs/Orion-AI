@@ -38,9 +38,14 @@ def test_faster_whisper_transcribe():
 
     mock_model.transcribe.return_value = ([mock_segment], mock_info)
 
+    # _decode_audio_bytes must be mocked too: b"fake audio bytes" is not
+    # decodable audio, and this only appeared to pass while PyAV was absent.
     with patch(
         "orion.speech.faster_whisper.WhisperModel",
         return_value=mock_model,
+    ), patch(
+        "orion.speech.faster_whisper._decode_audio_bytes",
+        return_value=[0.0] * 16000,
     ):
         from orion.speech.faster_whisper import FasterWhisperBackend
 
@@ -53,17 +58,39 @@ def test_faster_whisper_transcribe():
         assert result.duration_seconds == 1.5
 
 
-def test_faster_whisper_health_no_model():
-    """Health returns False before model is loaded."""
-    with patch(
-        "orion.speech.faster_whisper.WhisperModel",
-        new=None,
+def test_faster_whisper_health_when_not_installed():
+    """Health is False when the faster-whisper package is not installed.
+
+    WhisperModel is now imported lazily (the eager import cost ~6 s of server
+    startup), so `WhisperModel is None` means "not loaded yet", not "missing".
+    Absence is simulated at the package-discovery level instead.
+    """
+    with patch("orion.speech.faster_whisper.WhisperModel", new=None), patch(
+        "orion.speech.faster_whisper._importlib_util.find_spec",
+        return_value=None,
     ):
         from orion.speech.faster_whisper import FasterWhisperBackend
 
         backend = FasterWhisperBackend.__new__(FasterWhisperBackend)
         backend._model = None
         assert backend.health() is False
+
+
+def test_faster_whisper_healthy_before_first_load():
+    """Installed but not yet loaded must still report healthy.
+
+    The model only loads on the first transcription; /v1/speech/health must not
+    report STT as unavailable just because nobody has spoken yet.
+    """
+    with patch("orion.speech.faster_whisper.WhisperModel", new=None), patch(
+        "orion.speech.faster_whisper._importlib_util.find_spec",
+        return_value=object(),
+    ):
+        from orion.speech.faster_whisper import FasterWhisperBackend
+
+        backend = FasterWhisperBackend.__new__(FasterWhisperBackend)
+        backend._model = None
+        assert backend.health() is True
 
 
 def test_faster_whisper_supported_formats():

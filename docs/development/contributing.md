@@ -18,7 +18,7 @@ contribute code to Orion.
 ### Clone and Install
 
 ```bash
-git clone https://github.com/open-orion/Orion.git
+git clone https://github.com/AstraDev-Labs/Orion-AI.git
 cd Orion
 uv sync --extra dev
 ```

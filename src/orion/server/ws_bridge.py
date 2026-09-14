@@ -28,6 +28,11 @@ _AGENT_EVENTS = {
     EventType.TOOL_CALL_END,
     EventType.INFERENCE_START,
     EventType.INFERENCE_END,
+    EventType.CHANNEL_MESSAGE_NOTIFY,
+    EventType.WORKFLOW_NODE_START,
+    EventType.WORKFLOW_NODE_END,
+    EventType.COUNCIL_SEAT_START,
+    EventType.COUNCIL_SEAT_END,
 }
 
 

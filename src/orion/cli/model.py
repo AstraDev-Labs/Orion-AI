@@ -227,7 +227,7 @@ def pull(model_name: str, engine: str | None) -> None:
         host = (
             config.engine.ollama_host
             or os.environ.get("OLLAMA_HOST")
-            or "http://localhost:11434"
+            or "http://127.0.0.1:11434"
         ).rstrip("/")
         if not ollama_pull(host, model_name, console):
             sys.exit(1)

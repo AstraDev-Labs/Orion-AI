@@ -1,0 +1,47 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+import { CONTACT_EMAIL, url } from '../lib/site';
+---
+
+<SiteLayout title="Press kit" description="Orion logo, banner and a short description for articles, videos and posts.">
+  <section class="container-site max-w-4xl pb-10 pt-16 sm:pt-20">
+    <p class="eyebrow">Press kit</p>
+    <h1 class="display mt-4 text-4xl font-bold text-white sm:text-5xl">Orion brand assets</h1>
+    <p class="mt-5 max-w-2xl text-lg text-[var(--color-muted)]">Writing about Orion or making a video? Use these assets as they are. Please don’t recolour or distort the logo.</p>
+
+    <div class="mt-10 grid gap-5 md:grid-cols-2">
+      <figure class="panel overflow-hidden">
+        <img src={url('/orion-banner.jpg')} alt="Orion AI banner: autonomous, persistent, self-developing" class="aspect-video w-full object-cover" loading="lazy" />
+        <figcaption class="flex items-center justify-between p-4 text-sm">
+          <span class="text-white">Banner · 1600 × 901</span>
+          <a class="text-[var(--color-cyan-soft)] underline" href={url('/orion-banner.jpg')} download>Download</a>
+        </figcaption>
+      </figure>
+      <figure class="panel overflow-hidden">
+        <div class="flex aspect-video items-center justify-center bg-[radial-gradient(circle,#0b1d40,#02060f_70%)]">
+          <img src={url('/orion-logo.png')} alt="Orion logo" class="h-44 w-44" loading="lazy" />
+        </div>
+        <figcaption class="flex items-center justify-between p-4 text-sm">
+          <span class="text-white">Logo · 512 × 512 PNG</span>
+          <a class="text-[var(--color-cyan-soft)] underline" href={url('/orion-logo.png')} download>Download</a>
+        </figcaption>
+      </figure>
+    </div>
+
+    <div class="prose-site mt-12">
+      <h2>About Orion, in brief</h2>
+      <p><strong>Short:</strong> Orion is a free, open-source AI assistant that runs on your own Windows PC.</p>
+      <p><strong>Longer:</strong> Orion is an on-device AI assistant for Windows, built by independent developer Tharun. It runs a local AI model, listens and speaks with local voice models, remembers context in a personal knowledge graph, and can open apps, control the PC and draft messages that only send with the user’s approval. It’s free, open source under the Apache License 2.0, and currently in alpha.</p>
+      <h2>Facts</h2>
+      <ul>
+        <li><strong>Name:</strong> Orion (Orion AI)</li>
+        <li><strong>Creator:</strong> Tharun</li>
+        <li><strong>Platform:</strong> Windows 10 and 11 (64-bit)</li>
+        <li><strong>Price:</strong> Free, open source (Apache 2.0)</li>
+        <li><strong>Status:</strong> Alpha</li>
+        <li><strong>Press contact:</strong> <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a></li>
+        <li><strong>Source:</strong> <a href="https://github.com/AstraDev-Labs/Orion-AI">github.com/AstraDev-Labs/Orion-AI</a></li>
+      </ul>
+    </div>
+  </section>
+</SiteLayout>

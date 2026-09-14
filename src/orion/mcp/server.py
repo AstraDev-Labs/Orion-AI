@@ -165,8 +165,14 @@ class MCPServer:
             except Exception as exc:
                 logger.warning("Failed to instantiate tool from %r: %s", cls, exc)
 
-        # Also check ToolRegistry for any user-registered tools
+        # Also check ToolRegistry for any tools not in the hardcoded list above.
+        # Importing orion.tools here is required, not optional: it's what
+        # actually runs every module's @ToolRegistry.register() decorator.
+        # Without it ToolRegistry stays empty on the normal startup path
+        # (only orion/cli/serve.py's channel-bridge branch happened to import
+        # it before), silently hiding every tool not listed by hand above.
         try:
+            import orion.tools  # noqa: F401
             from orion.core.registry import ToolRegistry
 
             known_names = {t.spec.name for t in tools}

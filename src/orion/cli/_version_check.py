@@ -1,4 +1,10 @@
-"""Check for newer Orion releases on PyPI."""
+"""Check for newer Orion releases on GitHub.
+
+Orion is released as GitHub Releases (tags like ``v1.0.1``); it is not on
+PyPI. Copies installed with the Windows installer skip this check entirely:
+the desktop app has its own update checker, which the user controls from the
+tray menu.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 _CACHE_PATH = Path("~/.orion/version-check.json").expanduser()
 _CACHE_TTL = 86400  # 24 hours
-_PYPI_API = "https://pypi.org/pypi/orion/json"
+_RELEASES_API = (
+    "https://api.github.com/repos/AstraDev-Labs/Orion-AI/releases?per_page=30"
+)
 
 
 def _config_path() -> Path:
@@ -63,7 +71,19 @@ def _check_disabled() -> bool:
     # ``OPENORION_NO_UPDATE_CHECK=0`` if they want the nudge anyway.
     if os.environ.get("CI", "").strip().lower() in ("1", "true", "yes", "on"):
         return True
+    if _installed_by_installer():
+        return True
     return _config_disabled()
+
+
+def _installed_by_installer() -> bool:
+    """True for Windows installer copies, whose desktop app handles updates."""
+    try:
+        from orion.cli._install_detect import detect_install
+
+        return detect_install().kind == "installer"
+    except Exception:
+        return False
 
 
 def _config_disabled() -> bool:
@@ -101,7 +121,7 @@ def check_for_updates(command_name: str) -> None:
 
     Honors ``OPENORION_NO_UPDATE_CHECK=1`` and ``CI=true`` — any
     truthy value (``1``, ``true``, ``yes``, ``on``) disables both the
-    PyPI poll and the banner. See ``_check_disabled`` for the full list.
+    GitHub poll and the banner. See ``_check_disabled`` for the full list.
     """
     if command_name not in _CHECK_COMMANDS:
         return
@@ -127,19 +147,20 @@ def _do_check() -> None:
         if Version(latest) > Version(current):
             from orion.cli._install_detect import detect_install
 
-            cmd = detect_install().upgrade_command
+            info = detect_install()
+            follow_up = "Or run: orion self-update\n" if info.upgrade_command else ""
             sys.stderr.write(
                 f"\033[33mA new version of Orion is available "
                 f"(v{current} → v{latest})\n"
-                f"Update: {cmd}\n"
-                f"Or run: orion self-update\033[0m\n\n"
+                f"Update: {info.upgrade_hint}\n"
+                f"{follow_up}\033[0m\n"
             )
     except InvalidVersion:
         pass
 
 
 def _get_latest_version(current: str) -> str | None:
-    """Return the latest non-prerelease version string from cache or PyPI.
+    """Return the latest non-prerelease version string from cache or GitHub.
 
     Returns ``None`` on network/parse failures rather than caching a stale
     or empty result. Dev/pre-release versions (``.devN``, ``aN``, ``bN``,
@@ -178,37 +199,50 @@ def _get_latest_version(current: str) -> str | None:
 
 
 def _fetch_latest_stable() -> str | None:
-    """Query PyPI and return the highest non-prerelease version, or ``None``."""
+    """Query GitHub Releases and return the highest stable version, or ``None``.
+
+    Drafts, GitHub pre-releases, tags that aren't versions (such as
+    ``desktop-latest``) and dev/pre-release versions are all ignored.
+    """
     try:
         import urllib.request
 
-        with urllib.request.urlopen(_PYPI_API, timeout=3) as resp:
-            data = json.loads(resp.read())
+        request = urllib.request.Request(
+            _RELEASES_API,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "orion-cli",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=3) as resp:
+            releases = json.loads(resp.read())
     except Exception as exc:
-        logger.debug("PyPI poll failed: %s", exc)
+        logger.debug("GitHub release poll failed: %s", exc)
+        return None
+
+    if not isinstance(releases, list):
         return None
 
     try:
         from packaging.version import InvalidVersion, Version
     except ImportError:
-        # Fall back to the raw info.version if packaging isn't installed.
-        return data.get("info", {}).get("version") or None
+        return None
 
-    releases = data.get("releases", {})
     stable: list[Version] = []
-    for raw in releases.keys():
+    for release in releases:
+        if (
+            not isinstance(release, dict)
+            or release.get("draft")
+            or release.get("prerelease")
+        ):
+            continue
+        tag = str(release.get("tag_name") or "")
         try:
-            v = Version(raw)
+            v = Version(tag[1:] if tag[:1] in ("v", "V") else tag)
         except InvalidVersion:
             continue
         if v.is_prerelease or v.is_devrelease:
             continue
         stable.append(v)
 
-    if stable:
-        return str(max(stable))
-
-    # No stable releases yet — fall back to info.version (handles brand-new
-    # projects that have only published dev releases).
-    info_version = data.get("info", {}).get("version")
-    return info_version or None
+    return str(max(stable)) if stable else None

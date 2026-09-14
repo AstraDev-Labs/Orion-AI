@@ -1,0 +1,80 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+import DownloadButton from '../components/DownloadButton.tsx';
+import ReleaseInfo from '../components/ReleaseInfo.tsx';
+import { RELEASES_URL, url } from '../lib/site';
+---
+
+<SiteLayout title="Download" description="Download the Orion alpha installer for Windows 10 and 11. Setup installs the local AI engine, a model sized to your PC, and voice.">
+  <section class="container-site max-w-4xl pb-6 pt-16 sm:pt-20">
+    <span class="badge-alpha">Alpha build</span>
+    <h1 class="display mt-5 text-4xl font-bold text-white sm:text-5xl">Download Orion</h1>
+    <p class="mt-5 max-w-2xl text-lg text-[var(--color-muted)]">
+      One installer for Windows 10 and 11 (64-bit). It sets up everything Orion needs: the local AI engine, a model sized to your PC, speech recognition, the voice, and any extras you pick.
+    </p>
+
+    <div class="panel mt-10 p-6 sm:p-8">
+      <div class="flex flex-wrap items-center justify-between gap-6">
+        <div class="flex items-center gap-4">
+          <div class="flex h-14 w-14 items-center justify-center rounded-2xl border border-[var(--color-line-strong)] bg-[rgb(56_189_248/0.08)]">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="#7dd3fc" aria-hidden="true"><path d="M3 5.1 10.4 4v7.1H3V5.1Zm0 13.8 7.4 1.1v-7H3v5.9ZM11.3 3.9 21 2.5v8.6h-9.7V3.9Zm0 16.2L21 21.5v-8.5h-9.7v7.1Z" /></svg>
+          </div>
+          <div>
+            <p class="text-lg font-semibold text-white">Orion for Windows</p>
+            <p class="text-sm text-[var(--color-faint)]">OrionSetup.exe · per-user install, no admin rights needed</p>
+          </div>
+        </div>
+        <DownloadButton client:load size="lg" requirementsHref={url('/system-requirements')} />
+      </div>
+      <div class="mt-6 border-t border-[var(--color-line)] pt-5">
+        <ReleaseInfo client:load />
+      </div>
+    </div>
+
+    <blockquote class="mt-8 rounded-r-xl border-l-4 border-[var(--color-warn)] bg-[rgb(251_191_36/0.06)] p-5 text-[0.95rem] leading-relaxed text-[#fde68a]">
+      <strong class="text-[#fef3c7]">Orion is alpha software.</strong> It has bugs and unfinished features. Please don't rely on it for anything important yet, and <a class="underline" href={url('/contact')}>tell us</a> when something breaks.
+    </blockquote>
+  </section>
+
+  <section class="container-site max-w-4xl py-10">
+    <h2 class="text-2xl font-semibold text-white">Installing</h2>
+    <ol class="mt-6 space-y-4">
+      {
+        [
+          ['Run OrionSetup.exe.', 'If Windows shows “Windows protected your PC”, choose More info → Run anyway. The installer isn’t code-signed yet; signing is planned.'],
+          ['Accept the terms and choose a folder.', 'Pick another drive if C: is short on space: the engine and models go into the same folder.'],
+          ['Choose features.', 'The assistant, AI engine, model, voice and memory always install. WhatsApp, browser control, PDFs, Telegram, GPU monitoring and screen understanding are optional.'],
+          ['Wait for setup to finish.', 'It downloads the AI engine and model (several GB). A progress window shows each step.'],
+          ['Open Orion.', 'Find it in the Start menu. It greets you when it’s ready.'],
+        ].map(([t, b], i) => (
+          <li class="panel flex gap-5 p-5">
+            <span class="display text-xl font-bold text-[rgb(125_211_252/0.5)]">{String(i + 1).padStart(2, '0')}</span>
+            <div>
+              <p class="font-semibold text-white">{t}</p>
+              <p class="mt-1 text-sm leading-relaxed text-[var(--color-muted)]">{b}</p>
+            </div>
+          </li>
+        ))
+      }
+    </ol>
+
+    <div class="mt-12 grid gap-5 md:grid-cols-3">
+      <a href={url('/system-requirements')} class="panel block p-5 hover:border-[var(--color-line-strong)]">
+        <p class="font-semibold text-white">System requirements</p>
+        <p class="mt-1 text-sm text-[var(--color-muted)]">Check your PC before installing.</p>
+      </a>
+      <a href={url('/docs/troubleshooting')} class="panel block p-5 hover:border-[var(--color-line-strong)]">
+        <p class="font-semibold text-white">Troubleshooting</p>
+        <p class="mt-1 text-sm text-[var(--color-muted)]">If setup stops or voice is silent.</p>
+      </a>
+      <a href={RELEASES_URL} class="panel block p-5 hover:border-[var(--color-line-strong)]">
+        <p class="font-semibold text-white">All releases</p>
+        <p class="mt-1 text-sm text-[var(--color-muted)]">Older builds and release notes on GitHub.</p>
+      </a>
+    </div>
+
+    <p class="mt-10 text-sm text-[var(--color-faint)]">
+      Using macOS or Linux? There’s no installer yet. You can <a class="text-[var(--color-cyan-soft)] underline" href={url('/docs/build-from-source')}>build Orion from source</a>.
+    </p>
+  </section>
+</SiteLayout>

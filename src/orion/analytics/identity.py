@@ -83,10 +83,11 @@ def is_analytics_enabled(cfg: AnalyticsConfig) -> bool:
        or ``OPENORION_NO_ANALYTICS=1`` (project-specific). Both take
        precedence over the config so users can opt out without
        editing ``~/.orion/config.toml``.
-    3. The ``[analytics] enabled = false`` config-file setting.
+    3. The ``[analytics] enabled = false`` config-file setting (the default).
+    4. No ``host`` or ``key`` configured: there is nowhere to send to.
     """
     if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules:
         return False
     if _env_opt_out():
         return False
-    return cfg.enabled
+    return bool(cfg.enabled and cfg.host and cfg.key)

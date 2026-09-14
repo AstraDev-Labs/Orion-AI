@@ -37,9 +37,13 @@ class DiscordChannel(BaseChannel):
         self,
         bot_token: str = "",
         *,
+        owner_user_id: str = "",
         bus: Optional[EventBus] = None,
     ) -> None:
         self._token = bot_token or os.environ.get("DISCORD_BOT_TOKEN", "")
+        self._owner_user_id = str(
+            owner_user_id or os.environ.get("DISCORD_OWNER_USER_ID", "")
+        ).strip()
         self._bus = bus
         self._handlers: List[ChannelHandler] = []
         self._status = ChannelStatus.DISCONNECTED
@@ -95,17 +99,25 @@ class DiscordChannel(BaseChannel):
             logger.warning("Cannot send: no Discord bot token")
             return False
 
+        # `channel` is the channel *type* ("discord") when called from the
+        # generic wire_channel() handler, and the real destination is the
+        # channel id carried in conversation_id. Posting to /channels/discord/
+        # would just 404 -- the same mismatch that silently swallowed every
+        # WhatsApp auto-reply until it was tracked down.
+        target_channel = conversation_id or channel
+        if target_channel == self.channel_id:
+            logger.warning("Cannot send: no Discord channel id supplied")
+            return False
+
         try:
             import httpx
 
-            url = f"https://discord.com/api/v10/channels/{channel}/messages"
+            url = f"https://discord.com/api/v10/channels/{target_channel}/messages"
             headers = {
                 "Authorization": f"Bot {self._token}",
                 "Content-Type": "application/json",
             }
             payload: Dict[str, Any] = {"content": content}
-            if conversation_id:
-                payload["message_reference"] = {"message_id": conversation_id}
 
             resp = httpx.post(
                 url,
@@ -114,7 +126,7 @@ class DiscordChannel(BaseChannel):
                 timeout=10.0,
             )
             if resp.status_code < 300:
-                self._publish_sent(channel, content, conversation_id)
+                self._publish_sent(target_channel, content, conversation_id)
                 return True
             logger.warning(
                 "Discord API returned status %d: %s",
@@ -155,12 +167,31 @@ class DiscordChannel(BaseChannel):
             async def on_message(message):
                 if message.author == client.user:
                     return
+
+                # A bot in a server sees every readable message, so record
+                # whether this one was actually directed at the owner. The
+                # auto-reply policy needs that to avoid answering strangers'
+                # conversations in busy channels.
+                is_dm = message.guild is None
+                mentions_owner = False
+                if self._owner_user_id:
+                    mentions_owner = any(
+                        str(u.id) == self._owner_user_id for u in message.mentions
+                    )
+
                 cm = ChannelMessage(
                     channel="discord",
                     sender=str(message.author.id),
                     content=message.content,
                     message_id=str(message.id),
                     conversation_id=str(message.channel.id),
+                    metadata={
+                        "is_dm": is_dm,
+                        "mentions_owner": mentions_owner,
+                        "author_name": getattr(message.author, "display_name", "")
+                        or str(message.author),
+                        "guild_id": str(message.guild.id) if message.guild else "",
+                    },
                 )
                 for handler in self._handlers:
                     try:

@@ -160,7 +160,7 @@ def write_initial_config(
         f'"file_read", "shell_exec"]\n'
     )
 
-    _cfg.DEFAULT_CONFIG_PATH.write_text(base_toml)
+    _cfg.DEFAULT_CONFIG_PATH.write_text(base_toml, encoding="utf-8")
 
     _seed_memory_files()
 

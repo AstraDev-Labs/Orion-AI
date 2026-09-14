@@ -124,3 +124,12 @@ class TestAnonId:
         get_or_create_anon_id(p)
         tmp_artifacts = list(tmp_path.glob("anon_id*.tmp"))
         assert tmp_artifacts == []
+
+
+def test_defaults_send_nothing():
+    # Local-first: no analytics unless a user configures their own endpoint.
+    # The defaults used to point at a PostHog project Orion does not run.
+    cfg = AnalyticsConfig()
+    assert cfg.enabled is False
+    assert cfg.host == ""
+    assert cfg.key == ""

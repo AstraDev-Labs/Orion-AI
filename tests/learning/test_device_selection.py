@@ -6,19 +6,20 @@ from __future__ import annotations
 class TestSelectTorchDevice:
     """Tests for _select_torch_device() logic in orchestrator trainers.
 
-    Since torch is not installed in the test environment, we test the
-    selection logic directly rather than through the function (which
-    returns None when torch is absent).
+    The selection logic is tested directly. The no-torch branch is exercised
+    by patching HAS_TORCH rather than relying on torch being absent from the
+    environment -- torch is now a real dependency (Chatterbox TTS), so an
+    environment-shaped assertion silently became untrue.
     """
 
     def test_no_torch_returns_none(self):
         """Without torch, _select_torch_device returns None."""
-        from orion.learning.intelligence.orchestrator.sft_trainer import (
-            _select_torch_device,
-        )
+        from unittest.mock import patch
 
-        # torch is not installed in test env, so HAS_TORCH is False
-        assert _select_torch_device() is None
+        from orion.learning.intelligence.orchestrator import sft_trainer
+
+        with patch.object(sft_trainer, "HAS_TORCH", False):
+            assert sft_trainer._select_torch_device() is None
 
     def test_cuda_preferred(self):
         """CUDA is selected when available (logic test)."""

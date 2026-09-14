@@ -6,7 +6,7 @@ set -euo pipefail
 # the backend API server and frontend, then opens the browser.
 #
 # Usage:
-#   git clone https://github.com/open-orion/Orion.git
+#   git clone https://github.com/AstraDev-Labs/Orion-AI.git
 #   cd Orion
 #   ./scripts/quickstart.sh
 # ──────────────────────────────────────────────────────────────────────

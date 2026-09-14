@@ -22,6 +22,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 tokio = { version = "1", features = ["full"] }
+arboard = "3"
+# Verifies in-app update installers (src/app_update.rs); already used by tauri-plugin-updater.
+minisign-verify = "0.2"
+base64 = "0.22"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"

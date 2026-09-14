@@ -12,9 +12,12 @@ Supports two modes:
 
 from __future__ import annotations
 
+import asyncio
 import concurrent.futures
+import logging
+import time
 import re
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 from orion.agents._stubs import AgentContext, AgentResult, ToolUsingAgent
 from orion.core.events import EventBus
@@ -34,6 +37,71 @@ except ImportError:
         return decorator
 
 
+logger = logging.getLogger(__name__)
+
+
+# Tools that only look things up. The model may call these even when the
+# router did not offer them for the request (a follow-up lookup it needs).
+# Anything else changes something -- away mode, volume, a message draft, a
+# file, an install -- and runs only when offered for the user's own request:
+# asked about the weather, a small model once also switched on away mode (it
+# knew the name from the system prompt), which starts auto-replying to the
+# user's WhatsApp contacts.
+_LOOKUP_TOOLS = frozenset({
+    "web_search", "web_fetch", "calculator", "system_info", "situation_awareness",
+    "memory_search", "memory_retrieve", "obsidian_search_notes", "file_read",
+    "kg_query", "kg_neighbors", "get_pending_actions", "check_permission",
+    "browser_extract", "browser_axtree", "browser_screenshot", "vision_capture",
+    "git_status", "git_diff", "git_log", "think",
+})
+
+
+def _unoffered_call_result(tool_name: str, offered: set[str], known: set[str]) -> Optional[ToolResult]:
+    """A refusal for a state-changing tool the router did not offer, else None.
+
+    Names outside `known` (no such tool) are left to the executor, which
+    points the model at propose_new_tool rather than a dead end.
+    """
+    if not offered or tool_name in offered or tool_name in _LOOKUP_TOOLS or tool_name not in known:
+        return None
+    return ToolResult(
+        tool_name=tool_name,
+        content=(
+            f"Not run: '{tool_name}' changes something, and the user's message did not ask "
+            "for it. Do not call it again for this request. Answer what the user actually "
+            "asked; if they want this done too, they can say so."
+        ),
+        success=False,
+    )
+
+
+def _streams_tool_calls(engine: Any, model: str) -> bool:
+    """True when `engine` streams tool calls, not just text.
+
+    The base InferenceEngine.stream_full wraps stream() and silently drops
+    tools, so streaming a tool turn through it would never call a tool.
+    Follows telemetry/guardrail wrappers (_inner/_engine) and MultiEngine
+    routing down to the engine that actually serves `model`.
+    """
+    current = engine
+    for _ in range(8):
+        route = getattr(current, "_engine_for", None)
+        if callable(route):
+            try:
+                current = route(model)
+            except Exception:
+                return False
+            continue
+        inner = getattr(current, "_inner", None)
+        if not isinstance(inner, InferenceEngine):
+            inner = getattr(current, "_engine", None)
+        if isinstance(inner, InferenceEngine):
+            current = inner
+            continue
+        return type(current).stream_full is not InferenceEngine.stream_full
+    return False
+
+
 @AgentRegistry.register("orchestrator")
 class OrchestratorAgent(ToolUsingAgent):
     """Multi-turn agent that routes between tools and the LLM.
@@ -51,6 +119,9 @@ class OrchestratorAgent(ToolUsingAgent):
     """
 
     agent_id = "orchestrator"
+    # run() accepts on_delta=callable: reply text is passed along as the model
+    # writes it (see _generate_streaming), instead of only once a turn is done.
+    supports_delta_stream = True
     _default_temperature = 0.7
     _default_max_tokens = 1024
     _default_max_turns = 10
@@ -70,6 +141,7 @@ class OrchestratorAgent(ToolUsingAgent):
         parallel_tools: bool = True,
         interactive: bool = False,
         confirm_callback=None,
+        max_tools_per_request: Optional[int] = None,
     ) -> None:
         super().__init__(
             engine,
@@ -88,6 +160,20 @@ class OrchestratorAgent(ToolUsingAgent):
 
         self._system_prompt = system_prompt
         self._parallel_tools = parallel_tools
+        if max_tools_per_request is None:
+            try:
+                from orion.core.config import load_config
+
+                max_tools_per_request = load_config().agent.max_tools_per_request
+            except Exception:
+                max_tools_per_request = 12
+        self._max_tools_per_request = max_tools_per_request
+        try:
+            from orion.core.config import load_config
+
+            self._time_budget_s = float(load_config().agent.max_seconds)
+        except Exception:
+            self._time_budget_s = 60.0
 
     @traceable(name="OrchestratorAgent.run", run_type="chain")
     def run(
@@ -127,7 +213,6 @@ class OrchestratorAgent(ToolUsingAgent):
         messages = self._build_messages(input, context, system_prompt=sys_prompt)
 
         all_tool_results: list[ToolResult] = []
-        recent_calls: list[str] = []
         turns = 0
 
         for _turn in range(self._max_turns):
@@ -139,8 +224,10 @@ class OrchestratorAgent(ToolUsingAgent):
             result = self._generate(messages)
             content = result.get("content", "")
 
-            # DEBUG: Print the content
-            print(f"\n[DEBUG_AGENT_CONTENT]\n{content}\n[/DEBUG_AGENT_CONTENT]\n")
+            # Was a bare print() on every structured turn, which dumped the raw
+            # model output to stdout in production -- including into the CLI's
+            # rendered output and the server log. Kept as debug-level logging.
+            logger.debug("structured turn %d raw content: %s", turns, content)
 
             parsed = self._parse_structured_response(content)
 
@@ -307,11 +394,16 @@ class OrchestratorAgent(ToolUsingAgent):
                 summary = content
             else:
                 summary = last_good
-            self._emit_turn_end(turns=turns)
+            # Still a max-turns exit, even though a usable answer was salvaged
+            # from the tool results. Reporting it keeps the flag consistent with
+            # the native tool-calling path, so a caller can always tell a
+            # converged run from one that simply ran out of turns.
+            self._emit_turn_end(turns=turns, max_turns_exceeded=True)
             return AgentResult(
                 content=summary,
                 tool_results=all_tool_results,
                 turns=turns,
+                metadata={"max_turns_exceeded": True},
             )
 
         return self._max_turns_result(all_tool_results, turns)
@@ -361,6 +453,72 @@ class OrchestratorAgent(ToolUsingAgent):
     # Function-calling mode (original behaviour)
     # ------------------------------------------------------------------
 
+    def _generate_streaming(
+        self,
+        messages: list[Message],
+        on_delta: Callable[[str], None],
+        **extra_kwargs: Any,
+    ) -> dict:
+        """Like _generate(), but streamed: content goes to `on_delta` as it arrives.
+
+        A tool turn used to be generated whole before any of it reached the
+        user, so after a tool ran, voice waited for the model's last word.
+        Returns the same shape as engine.generate().
+        """
+        content_parts: list[str] = []
+        calls: list[dict[str, str]] = []
+        state: dict[str, Any] = {"usage": {}, "finish_reason": "stop"}
+
+        async def consume() -> None:
+            async for chunk in self._engine.stream_full(
+                messages,
+                model=self._model,
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+                **extra_kwargs,
+            ):
+                if chunk.content:
+                    content_parts.append(chunk.content)
+                    on_delta(chunk.content)
+                for frag in chunk.tool_calls or []:
+                    fn = frag.get("function") or {}
+                    # A fragment naming a function starts a call (Ollama sends
+                    # whole calls, OpenAI-style streams name only the first
+                    # fragment); the rest continue the latest call's arguments.
+                    if fn.get("name") or not calls:
+                        calls.append({"id": frag.get("id") or f"call_{len(calls)}", "name": fn.get("name") or "", "arguments": ""})
+                    calls[-1]["arguments"] += fn.get("arguments") or ""
+                if chunk.usage:
+                    state["usage"] = dict(chunk.usage)
+                if chunk.finish_reason:
+                    state["finish_reason"] = chunk.finish_reason
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass  # no loop in this thread: safe to run one
+        else:
+            return self._generate(messages, **extra_kwargs)
+
+        try:
+            asyncio.run(consume())
+        except Exception:
+            if content_parts or calls:
+                raise  # part of the reply already reached the user
+            logger.debug("Streaming generate failed; retrying without streaming", exc_info=True)
+            return self._generate(messages, **extra_kwargs)
+
+        result: dict[str, Any] = {
+            "content": "".join(content_parts),
+            "usage": state["usage"],
+            "finish_reason": "length" if state["finish_reason"] == "length" else "stop",
+        }
+        if calls:
+            for call in calls:
+                call["arguments"] = call["arguments"] or "{}"
+            result["tool_calls"] = calls
+        return result
+
     def _run_function_calling(
         self,
         input: str,
@@ -374,13 +532,45 @@ class OrchestratorAgent(ToolUsingAgent):
             input, context, system_prompt=self._system_prompt or None
         )
 
-        # Get OpenAI-format tool definitions
-        openai_tools = self._executor.get_openai_tools() if self._tools else []
+        # Advertise only the tools relevant to this query. The executor
+        # still holds every tool, so a call outside the advertised subset
+        # continues to execute normally -- this narrows the menu, not the
+        # kitchen.
+        openai_tools = []
+        if self._tools:
+            try:
+                from orion.tools.tool_router import select_tools
+
+                routed = select_tools(
+                    self._tools, input, max_tools=self._max_tools_per_request
+                )
+                openai_tools = [t.to_openai_function() for t in routed]
+            except Exception:
+                logger.debug("Tool routing failed; advertising all tools", exc_info=True)
+                openai_tools = self._executor.get_openai_tools()
+
+        # Only a routed subset limits which state-changing tools may run.
+        # Unknown names are left out: the executor redirects those to
+        # propose_new_tool instead of a dead end.
+        offered: set[str] = set()
+        known: set[str] = set()
+        if openai_tools and self._tools and len(openai_tools) < len(self._tools):
+            offered = {t.get("function", {}).get("name", "") for t in openai_tools}
+            known = {t.spec.name for t in self._tools}
 
         all_tool_results: list[ToolResult] = []
         turns = 0
         total_prompt_tokens = 0
         total_completion_tokens = 0
+        started = time.monotonic()
+
+        # Set when every call in a turn was refused or blocked as a repeat: a
+        # small model otherwise retried the same blocked call until max_turns
+        # and the user got "Maximum turns reached without a final answer."
+        force_answer = False
+
+        on_delta = kwargs.get("on_delta")
+        stream_turns = callable(on_delta) and _streams_tool_calls(self._engine, self._model)
 
         for _turn in range(self._max_turns):
             turns += 1
@@ -390,10 +580,38 @@ class OrchestratorAgent(ToolUsingAgent):
 
             # Build generate kwargs
             gen_kwargs: dict[str, Any] = {}
-            if openai_tools:
+            out_of_time = (
+                turns > 1
+                and self._time_budget_s > 0
+                and time.monotonic() - started > self._time_budget_s
+            )
+            # The final allowed turn answers from what was gathered rather than
+            # starting a tool call that could never be followed up.
+            last_turn = self._max_turns > 1 and turns == self._max_turns and bool(all_tool_results)
+            if out_of_time or force_answer or last_turn:
+                # Stop using tools and answer now with what was gathered.
+                if out_of_time:
+                    reason = "Time limit reached."
+                elif force_answer:
+                    reason = "Your last tool calls were repeats or not allowed, so they did not run."
+                else:
+                    reason = "No more tool calls are possible."
+                messages.append(
+                    Message(
+                        role=Role.USER,
+                        content=(
+                            f"({reason} Do not call any more tools. Reply to me now using the "
+                            "results above, and say plainly if something is unfinished.)"
+                        ),
+                    )
+                )
+            elif openai_tools:
                 gen_kwargs["tools"] = openai_tools
 
-            result = self._generate(messages, **gen_kwargs)
+            if stream_turns:
+                result = self._generate_streaming(messages, on_delta, **gen_kwargs)
+            else:
+                result = self._generate(messages, **gen_kwargs)
 
             # Accumulate token usage
             usage = result.get("usage", {})
@@ -405,7 +623,10 @@ class OrchestratorAgent(ToolUsingAgent):
 
             # No tool calls -> check continuation, then final answer
             if not raw_tool_calls:
+                streamed = result.get("content", "") if stream_turns else ""
                 content = self._check_continuation(result, messages)
+                if stream_turns and len(content) > len(streamed):
+                    on_delta(content[len(streamed):])  # continuation after a length cut-off
                 content = self._strip_think_tags(content)
                 self._emit_turn_end(turns=turns, content_length=len(content))
                 return AgentResult(
@@ -442,6 +663,9 @@ class OrchestratorAgent(ToolUsingAgent):
             if self._parallel_tools and len(tool_calls) > 1:
                 # Parallel execution
                 def _exec_tool(tc: ToolCall) -> tuple:
+                    refused = _unoffered_call_result(tc.name, offered, known)
+                    if refused is not None:
+                        return tc, refused
                     if self._loop_guard:
                         verdict = self._loop_guard.check_call(
                             tc.name,
@@ -479,6 +703,14 @@ class OrchestratorAgent(ToolUsingAgent):
             else:
                 # Sequential execution
                 for tc in tool_calls:
+                    refused = _unoffered_call_result(tc.name, offered, known)
+                    if refused is not None:
+                        logger.info("Refused unoffered tool call: %s", tc.name)
+                        all_tool_results.append(refused)
+                        messages.append(
+                            Message(role=Role.TOOL, content=refused.content, tool_call_id=tc.id, name=tc.name)
+                        )
+                        continue
                     # Loop guard check before execution
                     if self._loop_guard:
                         verdict = self._loop_guard.check_call(
@@ -514,6 +746,11 @@ class OrchestratorAgent(ToolUsingAgent):
                             name=tc.name,
                         )
                     )
+
+            this_turn = all_tool_results[-len(tool_calls):]
+            force_answer = bool(this_turn) and all(
+                not r.success and r.content.startswith(("Loop guard:", "Not run:")) for r in this_turn
+            )
 
         # Max turns exceeded
         final_content = self._strip_think_tags(content) if content else ""

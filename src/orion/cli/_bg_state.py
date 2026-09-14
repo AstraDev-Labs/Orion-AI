@@ -40,6 +40,25 @@ def _safe_read(path: Path) -> Optional[str]:
         return None
 
 
+# Model ids contain a colon ("qwen3.5:9b"), which is not a legal character in a
+# Windows filename. Opening "qwen3.5:9b.ready" there does not fail loudly -- NTFS
+# interprets it as an alternate data stream on a file named "qwen3.5", so the
+# state silently vanishes and every model reads back as pending. State files
+# therefore encode the colon, and the reader accepts both spellings so any files
+# already written on Linux keep working.
+_COLON_SUB = "__"
+
+
+def model_state_filename(model_id: str, state: str) -> str:
+    """Filename for one model's state marker, safe on every platform."""
+    return f"{model_id.replace(':', _COLON_SUB)}.{state}"
+
+
+def _model_id_from_filename(stem: str) -> str:
+    """Reverse ``model_state_filename``'s encoding."""
+    return stem.replace(_COLON_SUB, ":")
+
+
 def get_status(home: Optional[Path] = None) -> BgStatus:
     """Snapshot the background-work state from the state directory."""
     home = home or config.DEFAULT_CONFIG_DIR
@@ -64,7 +83,7 @@ def get_status(home: Optional[Path] = None) -> BgStatus:
         for f in models_dir.iterdir():
             if f.suffix not in (".downloading", ".ready", ".failed"):
                 continue
-            model_id = f.name[: -len(f.suffix)]
+            model_id = _model_id_from_filename(f.name[: -len(f.suffix)])
             new_state = f.suffix.lstrip(".")
             current = seen.get(model_id, "")
             # Precedence: ready > failed > downloading

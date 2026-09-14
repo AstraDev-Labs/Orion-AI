@@ -118,7 +118,7 @@ class TestACEOptimizerOptimize:
                 self._store_with(20)
             )
         assert result["status"] == "error"
-        assert "learning-ace" in result["reason"]
+        assert "docs/learning/ace.md" in result["reason"]
 
     def test_filters_to_usable_samples(self) -> None:
         """If filtering trims samples below min_traces, skip cleanly."""

@@ -465,8 +465,8 @@ class TestSkillManagerOverlayLoading:
         from unittest.mock import patch
 
         from orion.core.config import (
-            OrionConfig,
             LearningConfig,
+            OrionConfig,
             SkillsLearningConfig,
         )
         from orion.core.events import EventBus

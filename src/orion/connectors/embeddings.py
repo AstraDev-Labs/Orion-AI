@@ -21,7 +21,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"  # not localhost: ~2s IPv6 fallback on Windows
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
 
 
@@ -33,7 +33,7 @@ class OllamaEmbedder:
     model:
         Ollama model tag (e.g. ``nomic-embed-text``, ``mxbai-embed-large``).
     host:
-        Base URL for the Ollama HTTP API. Defaults to ``http://localhost:11434``.
+        Base URL for the Ollama HTTP API. Defaults to ``http://127.0.0.1:11434``.
     timeout:
         Per-request timeout in seconds.
     """
@@ -91,7 +91,12 @@ class OllamaEmbedder:
         try:
             resp = requests.post(
                 f"{self._host}/api/embeddings",
-                json={"model": self._model, "prompt": text},
+                # num_gpu=0: keep the embedder off the GPU so it never
+                # competes with a concurrently-loaded chat model for
+                # limited VRAM -- see tools/storage/embeddings.py for the
+                # observed real-world impact (70s+ chat replies) when both
+                # shared a small card.
+                json={"model": self._model, "prompt": text, "options": {"num_gpu": 0}},
                 timeout=self._timeout,
             )
             resp.raise_for_status()

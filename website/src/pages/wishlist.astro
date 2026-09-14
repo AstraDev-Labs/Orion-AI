@@ -1,0 +1,35 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+import { NEW_ISSUE_URL, REPO_URL, url } from '../lib/site';
+
+const ideas = `${REPO_URL}/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement+sort%3Areactions-%2B1-desc`;
+---
+
+<SiteLayout title="Feature wishlist" description="Suggest features for Orion and vote on the ideas you want most.">
+  <section class="container-site max-w-3xl pb-10 pt-16 sm:pt-20">
+    <p class="eyebrow">Wishlist</p>
+    <h1 class="display mt-4 text-4xl font-bold text-white sm:text-5xl">Shape what Orion does next</h1>
+    <p class="mt-5 text-lg text-[var(--color-muted)]">
+      The wishlist lives on GitHub, so every idea is public and anyone can vote on it. The most-wanted ideas feed the <a class="text-[var(--color-cyan-soft)] underline" href={url('/roadmap')}>roadmap</a>.
+    </p>
+
+    <ol class="mt-10 space-y-4">
+      <li class="panel flex gap-5 p-5">
+        <span class="display text-xl font-bold text-[rgb(125_211_252/0.5)]">01</span>
+        <div>
+          <p class="font-semibold text-white">Look for your idea first</p>
+          <p class="mt-1 text-sm text-[var(--color-muted)]">If someone already suggested it, add a 👍 reaction. Votes are how ideas are ranked.</p>
+          <a href={ideas} class="btn btn-ghost mt-4">See ideas, most wanted first</a>
+        </div>
+      </li>
+      <li class="panel flex gap-5 p-5">
+        <span class="display text-xl font-bold text-[rgb(125_211_252/0.5)]">02</span>
+        <div>
+          <p class="font-semibold text-white">Suggest something new</p>
+          <p class="mt-1 text-sm text-[var(--color-muted)]">Describe what you want Orion to do and why it would help you.</p>
+          <a href={`${NEW_ISSUE_URL}?labels=enhancement&title=Idea%3A+`} class="btn btn-primary mt-4">Suggest a feature</a>
+        </div>
+      </li>
+    </ol>
+  </section>
+</SiteLayout>

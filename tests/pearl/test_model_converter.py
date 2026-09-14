@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,17 @@ def _load_converter():
     spec = importlib.util.spec_from_file_location("pearl_model_converter", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Register before exec_module: the converter defines dataclasses, and
+    # @dataclass resolves sys.modules[cls.__module__] while processing the
+    # class. Without this it reads None and raises AttributeError. This is the
+    # documented order for importlib.util, and the bug was only hidden while
+    # torch was absent and importorskip skipped the whole module.
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 

@@ -14,6 +14,24 @@ from orion.skills.tool_adapter import SkillTool
 from orion.system import SystemBuilder
 
 
+def _required_skills_installed() -> bool:
+    """Whether the specific skills these tests assert on are actually present."""
+    try:
+        names = set(SkillManager().skill_names())
+    except Exception:
+        return False
+    return {"research-and-summarize", "code-explainer"} <= names
+
+
+pytestmark = pytest.mark.skipif(
+    not _required_skills_installed(),
+    reason=(
+        "needs the research-and-summarize and code-explainer skills installed "
+        "(orion skill install ...); a running engine alone is not enough"
+    ),
+)
+
+
 @pytest.mark.live
 class TestSkillSystemIntegration:
     """Integration tests verifying skills flow end-to-end with a real engine."""

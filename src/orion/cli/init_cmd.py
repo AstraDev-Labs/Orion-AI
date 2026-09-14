@@ -44,7 +44,7 @@ def _detect_running_engines() -> list[str]:
     import httpx
 
     _PROBES: dict[str, str] = {
-        "ollama": "http://localhost:11434/api/tags",
+        "ollama": "http://127.0.0.1:11434/api/tags",
         "vllm": "http://localhost:8000/v1/models",
         "sglang": "http://localhost:30000/v1/models",
         "llamacpp": "http://localhost:8080/v1/models",
@@ -197,7 +197,7 @@ def _do_download(engine: str, model: str, spec, console: Console) -> None:
     import os
 
     if engine == "ollama":
-        host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+        host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
         ollama_pull(host, model, console)
     elif engine == "llamacpp":
         repo = spec.metadata.get("hf_repo", "")
@@ -340,7 +340,7 @@ def init(
             console.print(f"  Looked in: {examples_dir}")
             raise SystemExit(1)
         DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        DEFAULT_CONFIG_PATH.write_text(preset_path.read_text())
+        DEFAULT_CONFIG_PATH.write_text(preset_path.read_text(encoding="utf-8"), encoding="utf-8")
         console.print(
             f"[green]Preset '{preset}' installed to {DEFAULT_CONFIG_PATH}[/green]"
         )
@@ -439,7 +439,7 @@ def init(
             )
 
     if config:
-        toml_content = config.read_text()
+        toml_content = config.read_text(encoding="utf-8")
     else:
         if full_config:
             toml_content = generate_default_toml(hw, engine=engine, host=host)
@@ -448,9 +448,9 @@ def init(
 
     DEFAULT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     if config:
-        config.write_text(toml_content)
+        config.write_text(toml_content, encoding="utf-8")
     else:
-        DEFAULT_CONFIG_PATH.write_text(toml_content)
+        DEFAULT_CONFIG_PATH.write_text(toml_content, encoding="utf-8")
 
     console.print()
     console.print(
@@ -488,9 +488,9 @@ sources = ["gcalendar"]
 sources = ["hackernews", "news_rss"]
 """
         target = config if config else DEFAULT_CONFIG_PATH
-        existing = target.read_text()
-        target.write_text(existing + digest_section)
-        toml_content = target.read_text()
+        existing = target.read_text(encoding="utf-8")
+        target.write_text(existing + digest_section, encoding="utf-8")
+        toml_content = target.read_text(encoding="utf-8")
         console.print(
             "[green]Morning Digest config added.[/green] "
             "Run [bold]orion connect gdrive[/bold] to connect "

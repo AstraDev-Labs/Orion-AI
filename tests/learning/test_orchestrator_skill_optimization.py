@@ -65,8 +65,8 @@ class TestOrchestratorRunSkillTrigger:
 
     def _make_config(self, *, auto_optimize: bool):
         from orion.core.config import (
-            OrionConfig,
             LearningConfig,
+            OrionConfig,
             SkillsLearningConfig,
         )
 

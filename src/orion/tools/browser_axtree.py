@@ -18,12 +18,16 @@ from orion.tools._stubs import BaseTool, ToolSpec
 # This is imported at module level so tests can patch
 # ``orion.tools.browser_axtree._session``.
 try:
-    from orion.tools.browser import _session
+    from orion.tools.browser import _on_browser_thread, _session
 except Exception:  # pragma: no cover — optional dependency
     _session = None  # type: ignore[assignment]
 
+    def _on_browser_thread(cls):  # type: ignore[no-redef]
+        return cls
+
 
 @ToolRegistry.register("browser_axtree")
+@_on_browser_thread
 class BrowserAXTreeTool(BaseTool):
     """Extract the accessibility tree from the current browser page."""
 
@@ -71,6 +75,15 @@ class BrowserAXTreeTool(BaseTool):
             )
 
         try:
+            if not hasattr(page, "accessibility"):
+                # Playwright removed page.accessibility; its replacement is an
+                # ARIA snapshot of the page as indented YAML-like text.
+                aria = page.locator("body").aria_snapshot()
+                return ToolResult(
+                    tool_name="browser_axtree",
+                    content=aria or "No accessibility tree available.",
+                    success=bool(aria),
+                )
             snapshot = page.accessibility.snapshot()
             if not snapshot:
                 return ToolResult(

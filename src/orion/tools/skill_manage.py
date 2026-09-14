@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import re
+
 from pathlib import Path
 from typing import Any, List
 
@@ -40,6 +43,15 @@ class SkillManageTool(BaseTool):
                     },
                     "steps": {
                         "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tool_name": {"type": "string"},
+                                "arguments_template": {"type": "string"},
+                                "output_key": {"type": "string"},
+                            },
+                            "required": ["tool_name"],
+                        },
                         "description": (
                             "List of step dicts with tool_name and optional"
                             " arguments_template (for create)."
@@ -77,23 +89,35 @@ class SkillManageTool(BaseTool):
                 success=False,
                 content="Skill name is required.",
             )
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+            return ToolResult(
+                tool_name=self.spec.name,
+                success=False,
+                content="Skill name may only use letters, digits, '-' and '_' (max 64).",
+            )
         self._skills_dir.mkdir(parents=True, exist_ok=True)
         path = self._skills_dir / f"{name}.toml"
+        # json.dumps yields valid TOML basic strings; the old f-strings broke
+        # the file on any quote, and plain-string steps crashed with
+        # "'str' object has no attribute 'get'".
         lines = [
             "[skill]",
-            f'name = "{name}"',
-            f'description = "{description}"',
+            f"name = {json.dumps(name)}",
+            f"description = {json.dumps(description or '')}",
             "",
         ]
-        for step in steps:
+        for step in steps or []:
+            if isinstance(step, str):
+                step = {"tool_name": step}
+            if not isinstance(step, dict) or not step.get("tool_name"):
+                continue
             lines.append("[[skill.steps]]")
-            lines.append(f'tool_name = "{step.get("tool_name", "")}"')
-            if "arguments_template" in step:
-                lines.append(f"arguments_template = '{step['arguments_template']}'")
-            if "output_key" in step:
-                lines.append(f'output_key = "{step["output_key"]}"')
+            lines.append(f"tool_name = {json.dumps(str(step['tool_name']))}")
+            for key in ("arguments_template", "output_key"):
+                if key in step:
+                    lines.append(f"{key} = {json.dumps(str(step[key]))}")
             lines.append("")
-        path.write_text("\n".join(lines))
+        path.write_text("\n".join(lines), encoding="utf-8")
         return ToolResult(
             tool_name=self.spec.name,
             success=True,

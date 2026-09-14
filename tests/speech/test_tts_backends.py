@@ -71,11 +71,15 @@ def test_kokoro_registered():
     assert TTSRegistry.contains("kokoro")
 
 
-def test_kokoro_health_false_without_package():
+def test_kokoro_health_false_without_package(monkeypatch):
+    import sys
+
     from orion.speech.kokoro_tts import KokoroTTSBackend
 
+    # Simulate the package being absent even where it is installed: a None
+    # entry in sys.modules makes `from kokoro import ...` raise ImportError.
+    monkeypatch.setitem(sys.modules, "kokoro", None)
     backend = KokoroTTSBackend()
-    # Without kokoro installed, health returns False
     assert backend.health() is False
 
 
@@ -104,3 +108,16 @@ def test_openai_tts_synthesize():
 
     assert result.audio == b"fake-openai-audio"
     assert result.voice_id == "nova"
+
+
+def test_english_speech_uses_english_whisper_model():
+    # Multilingual "base" misheard 41.7% of words through a laptop mic with
+    # English locked; "base.en" 11.7% at the same speed.
+    from orion.speech._discovery import whisper_model_for
+
+    assert whisper_model_for("base", "en") == "base.en"
+    assert whisper_model_for("small", "English") == "small.en"
+    assert whisper_model_for("base", "") == "base"  # auto-detect keeps multilingual
+    assert whisper_model_for("base", "ta") == "base"
+    assert whisper_model_for("large-v3", "en") == "large-v3"  # no English-only variant
+    assert whisper_model_for("base.en", "en") == "base.en"

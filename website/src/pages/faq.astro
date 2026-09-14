@@ -1,0 +1,61 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+import { url } from '../lib/site';
+
+const faqs: Array<[string, string]> = [
+  ['Is Orion free?', 'Yes. Orion is free and open source under the Apache License 2.0. There is no account, subscription or paid tier.'],
+  ['Does Orion send my conversations to the cloud?', 'No. Orion runs its AI model on your own PC. It only goes online when you ask it to, for example to search the web, check the weather or message someone, or if you deliberately add a cloud AI key. See the <a href="PRIVACY">privacy policy</a>.'],
+  ['Why does Windows say "Windows protected your PC"?', 'The alpha installer isn’t code-signed yet, so SmartScreen doesn’t recognise it. Choose <strong>More info → Run anyway</strong>. Signing is on the <a href="ROADMAP">roadmap</a>.'],
+  ['How much space does it need?', 'About 12 GB free on the drive you install to. Most of that is the AI engine and model. You can choose another drive during setup.'],
+  ['Do I need a graphics card?', 'No. Orion runs on the processor if there’s no suitable GPU. An NVIDIA card with 4 GB or more makes replies faster.'],
+  ['Does it work offline?', 'After setup, chatting, voice, memory and controlling your PC work offline. Web search, weather, messaging and updates need internet.'],
+  ['Is there a Mac or Linux version?', 'Not as an installer yet. Developers can build Orion from source on those systems.'],
+  ['Orion is slow or mishears me. What can I do?', 'Close heavy apps and games, since they compete for the same processor. Speak close to the microphone. The <a href="TROUBLESHOOTING">troubleshooting guide</a> has more fixes.'],
+  ['Can Orion send messages without asking?', 'No. Messages and emails are drafted and only sent after you say yes. The one exception is away mode, which you turn on yourself: it auto-replies to incoming messages and says it’s your AI assistant.'],
+  ['How do I update?', 'Orion checks for updates and notifies you. Choose Update now in the app or the tray menu; it installs and reopens by itself.'],
+  ['How do I uninstall?', 'Use Windows Settings → Apps → Orion → Uninstall. You’ll be asked what to remove, including the AI models and your personal data.'],
+  ['Where do I report a bug?', 'On <a href="ISSUES">GitHub Issues</a>. Include what you did, what happened, and your setup log if setup failed.'],
+  ['How do I contact the developer?', 'Send a message from the <a href="CONTACT">contact page</a>, or email <a href="mailto:orionai.offl@gmail.com">orionai.offl@gmail.com</a>.'],
+];
+
+const replace = (html: string) =>
+  html
+    .replace('PRIVACY', url('/privacy'))
+    .replace('ROADMAP', url('/roadmap'))
+    .replace('TROUBLESHOOTING', url('/docs/troubleshooting'))
+    .replace('CONTACT', url('/contact'))
+    .replace('ISSUES', 'https://github.com/AstraDev-Labs/Orion-AI/issues');
+
+const schema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqs.map(([q, a]) => ({
+    '@type': 'Question',
+    name: q,
+    acceptedAnswer: { '@type': 'Answer', text: a.replace(/<[^>]+>/g, '') },
+  })),
+};
+---
+
+<SiteLayout title="FAQ" description="Answers to common questions about Orion: privacy, requirements, the Windows warning, offline use, updates and uninstalling." schema={schema}>
+  <section class="container-site max-w-3xl pb-10 pt-16 sm:pt-20">
+    <p class="eyebrow">Help</p>
+    <h1 class="display mt-4 text-4xl font-bold text-white sm:text-5xl">Frequently asked questions</h1>
+    <div class="mt-10 space-y-3">
+      {
+        faqs.map(([q, a]) => (
+          <details class="panel group p-0">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 font-medium text-white">
+              {q}
+              <span class="text-[var(--color-cyan-soft)] transition-transform group-open:rotate-45" aria-hidden="true">+</span>
+            </summary>
+            <div class="prose-site px-5 pb-5 !text-[0.96rem]" set:html={replace(a)} />
+          </details>
+        ))
+      }
+    </div>
+    <p class="mt-10 text-sm text-[var(--color-faint)]">
+      Still stuck? Read the <a class="text-[var(--color-cyan-soft)] underline" href={url('/docs')}>docs</a> or <a class="text-[var(--color-cyan-soft)] underline" href={url('/contact')}>get in touch</a>.
+    </p>
+  </section>
+</SiteLayout>

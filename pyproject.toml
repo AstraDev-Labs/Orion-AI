@@ -31,6 +31,7 @@ dependencies = [
     "langsmith>=0.1.0",
     "openai>=1.30",
     "posthog>=3.0",
+    "psutil>=5.9",
     "nvidia-ml-py",
     "psycopg2-binary>=2.9",
     "python-telegram-bot>=22.6",
@@ -38,6 +39,8 @@ dependencies = [
     "tomli>=2.0; python_version < '3.11'",
     "tomli-w>=1.0",
     "tomlkit>=0.12",
+    "pycaw>=20251023",
+    "qrcode>=8.2",
 ]
 
 [project.optional-dependencies]
@@ -82,6 +85,16 @@ server = [
     "uvicorn>=0.30",
     "pydantic>=2.0",
     "python-multipart>=0.0.9",
+    # Desktop tooling shipped with the app. The Tauri launcher syncs only the
+    # server, inference-cloud and inference-google extras, so anything a
+    # bundled tool imports has to be reachable from one of those -- otherwise
+    # the tool registers fine, is offered to the model, and then fails on every
+    # call. vision_capture did exactly that: all four of its imports were
+    # missing from the runtime venv.
+    "mss>=9.0",              # vision_capture: screen capture
+    "pillow>=10.0",          # vision_capture: image encoding
+    "ollama>=0.3",           # vision_capture: local moondream description
+    "opencv-python>=4.9",    # vision_capture: webcam frames
 ]
 openhands = ["openhands-sdk>=1.0; python_version >= '3.12'"]
 gpu-metrics = ["nvidia-ml-py"]
@@ -130,7 +143,15 @@ speech = ["faster-whisper>=1.0"]
 speech-whispercpp = ["pywhispercpp>=1.2"]
 speech-kokoro = ["kokoro", "soundfile", "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"]
 speech-deepgram = ["deepgram-sdk>=3.0"]
+# Expressive local TTS with an emotion-intensity dial (MIT). Heavier than
+# kokoro -- pulls torch -- so it is a separate extra, not part of `speech`.
+speech-chatterbox = ["chatterbox-tts>=0.1.1", "soundfile", "torch", "torchaudio"]
 voice-cli = ["sounddevice>=0.4.6", "numpy>=1.20"]
+# Real-time voice pipeline orchestration (turn-taking, VAD, streaming STT/TTS).
+# Groundwork only — no telephony transport wired yet. Phone calling needs a
+# separate account with a provider (e.g. Twilio) before `pipecat-ai[twilio]`
+# is worth adding here.
+voice-pipecat = ["pipecat-ai>=0.0.50"]
 eval-wandb = ["wandb>=0.17"]
 eval-sheets = ["gspread>=6.0", "google-auth>=2.0"]
 mining-pearl-cpu = [
@@ -153,13 +174,23 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/open-orion/Orion"
-Documentation = "https://open-orion.github.io/Orion/"
-Repository = "https://github.com/open-orion/Orion"
-Issues = "https://github.com/open-orion/Orion/issues"
+Homepage = "https://github.com/AstraDev-Labs/Orion-AI"
+Documentation = "https://github.com/AstraDev-Labs/Orion-AI#readme"
+Repository = "https://github.com/AstraDev-Labs/Orion-AI"
+Issues = "https://github.com/AstraDev-Labs/Orion-AI/issues"
 
 [project.scripts]
 orion = "orion.cli:main"
+
+[tool.uv]
+# chatterbox-tts pins transformers==4.46.3, while vllm requires
+# transformers>=4.56 -- the two can never share one resolution. Declaring
+# them conflicting lets uv resolve each separately instead of failing the
+# whole lock. They are both optional extras and are not useful on the same
+# machine anyway (vllm targets server GPUs; chatterbox runs on CPU/small GPU).
+conflicts = [
+    [{ extra = "speech-chatterbox" }, { extra = "inference-vllm" }],
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/orion"]

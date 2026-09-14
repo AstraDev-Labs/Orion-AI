@@ -31,7 +31,7 @@ Orion is that stack. It is a framework for local-first personal AI, built around
     Run the full chat UI locally with one script:
 
     ```bash
-    git clone https://github.com/open-orion/Orion.git
+    git clone https://github.com/AstraDev-Labs/Orion-AI.git
     cd Orion
     ./scripts/quickstart.sh
     ```
@@ -47,16 +47,16 @@ Orion is that stack. It is a framework for local-first personal AI, built around
     **Step 1.** Start the backend:
 
     ```bash
-    git clone https://github.com/open-orion/Orion.git
+    git clone https://github.com/AstraDev-Labs/Orion-AI.git
     cd Orion
     ./scripts/quickstart.sh
     ```
 
     **Step 2.** Download and open the desktop app:
 
-    [Download for macOS](https://github.com/open-orion/Orion/releases/download/desktop-latest/Orion_0.1.0_universal.dmg){ .md-button .md-button--primary }
+    [Download for macOS](https://github.com/AstraDev-Labs/Orion/releases/download/desktop-latest/Orion_0.1.0_universal.dmg){ .md-button .md-button--primary }
 
-    Also available for [Windows](https://github.com/open-orion/Orion/releases/download/desktop-latest/Orion_0.1.0_x64-setup.exe), [Linux (DEB)](https://github.com/open-orion/Orion/releases/download/desktop-latest/Orion_0.1.0_amd64.deb), and [Linux (RPM)](https://github.com/open-orion/Orion/releases/download/desktop-latest/Orion-0.1.0-1.x86_64.rpm). See the [Downloads](downloads.md) page for details.
+    Also available for [Windows](https://github.com/AstraDev-Labs/Orion/releases/download/desktop-latest/Orion_0.1.0_x64-setup.exe), [Linux (DEB)](https://github.com/AstraDev-Labs/Orion/releases/download/desktop-latest/Orion_0.1.0_amd64.deb), and [Linux (RPM)](https://github.com/AstraDev-Labs/Orion/releases/download/desktop-latest/Orion-0.1.0-1.x86_64.rpm). See the [Downloads](downloads.md) page for details.
 
     The app connects to `http://localhost:8000` automatically.
 

@@ -33,7 +33,7 @@ context_from_memory = true                # Enable memory injection to learn use
 [memory]
 default_backend = "sqlite"
 db_path = "~/.orion/memory.db"
-obsidian_dir = "C:/Users/Tharun/Documents/Orion AI/ObsidianVault"
+obsidian_dir = ""                          # Optional: path to an Obsidian vault to read notes from
 
 [tools.mcp]
 enabled = true

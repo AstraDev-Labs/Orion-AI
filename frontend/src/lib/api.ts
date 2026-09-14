@@ -1,11 +1,13 @@
 import type { ModelInfo, SavingsData, ServerInfo } from '../types';
 
 // ---------------------------------------------------------------------------
-// Supabase config — safe to embed (RLS protects writes)
+// Community savings leaderboard (opt-in). No built-in database: the defaults
+// used to post a user's display name and email to a Supabase project Orion
+// does not run. Submissions are a no-op unless a build sets both variables.
 // ---------------------------------------------------------------------------
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://mtbtgpwzrbostweaanpr.supabase.co';
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im10YnRncHd6cmJvc3R3ZWFhbnByIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxODk0OTQsImV4cCI6MjA4ODc2NTQ5NH0._xMlqCfljtXpwPj54H-ghxfLFO-jiq4W2WhpU8vVL1c';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 declare global {
   interface Window {
@@ -98,6 +100,50 @@ export async function fetchModels(): Promise<ModelInfo[]> {
   if (!res.ok) throw new Error(`Failed to fetch models: ${res.status}`);
   const data = await res.json();
   return data.data || [];
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard Intelligence
+// ---------------------------------------------------------------------------
+
+export type ClipboardActionKind = 'translate' | 'summarize' | 'explain' | 'fix';
+
+export async function runClipboardAction(
+  text: string,
+  action: ClipboardActionKind,
+  targetLanguage?: string,
+): Promise<string> {
+  const res = await fetch(`${getBase()}/v1/clipboard/action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, action, target_language: targetLanguage }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`Clipboard action failed: ${detail}`);
+  }
+  const data = await res.json();
+  return data.result as string;
+}
+
+/** The clipboard text ORION most recently saw copied (Tauri desktop only). */
+export async function getPendingClipboardText(): Promise<string> {
+  if (!isTauri()) return '';
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<string>('get_pending_clipboard_text');
+}
+
+/** Tell the Rust watcher this text was written by ORION itself, so it won't re-trigger the panel. */
+export async function markClipboardSeen(text: string): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('mark_clipboard_seen', { text });
+}
+
+export async function closeClipboardPanel(): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('close_clipboard_panel');
 }
 
 export async function fetchRecommendedModel(): Promise<{ model: string; reason: string }> {

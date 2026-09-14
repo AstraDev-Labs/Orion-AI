@@ -1021,4 +1021,23 @@ def merge_discovered_models(engine_key: str, model_ids: List[str]) -> None:
             ModelRegistry.register_value(model_id, spec)
 
 
-__all__ = ["BUILTIN_MODELS", "merge_discovered_models", "register_builtin_models"]
+def resolve_hf_repo(model_id: str) -> str | None:
+    """Map a served model id (e.g. an Ollama tag like ``qwen3.5:4b``) to its
+    HuggingFace base repo, for LoRA training against the actual served
+    model's real base weights instead of an unrelated default. Returns
+    ``None`` (not a guess) if the model isn't in the catalog.
+    """
+    register_builtin_models()
+    if not ModelRegistry.contains(model_id):
+        return None
+    spec = ModelRegistry.get(model_id)
+    metadata = getattr(spec, "metadata", None) or {}
+    return metadata.get("hf_repo")
+
+
+__all__ = [
+    "BUILTIN_MODELS",
+    "merge_discovered_models",
+    "register_builtin_models",
+    "resolve_hf_repo",
+]

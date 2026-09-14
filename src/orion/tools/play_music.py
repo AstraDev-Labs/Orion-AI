@@ -105,9 +105,51 @@ def _build_query(
     return " ".join(parts)
 
 
+def _spotify_app_installed() -> bool:
+    """Whether a Spotify desktop app has registered the spotify: link type."""
+    if sys.platform != "win32":
+        return True  # open/xdg-open fail visibly elsewhere; keep old behaviour
+    try:
+        import winreg
+
+        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_CLASSES_ROOT):
+            try:
+                path = r"Software\Classes\spotify" if root == winreg.HKEY_CURRENT_USER else "spotify"
+                winreg.CloseKey(winreg.OpenKey(root, path))
+                return True
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return False
+
+
+def youtube_first_video_id(query: str) -> str:
+    """Video id of the top YouTube search result, or "" if it can't be read."""
+    encoded = urllib.parse.quote(query)
+    request = urllib.request.Request(
+        f"https://www.youtube.com/results?search_query={encoded}",
+        headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en"},
+    )
+    try:
+        html = urllib.request.urlopen(request, timeout=8).read().decode("utf-8", "replace")
+    except Exception:
+        return ""
+    match = re.search(r'"videoRenderer":\{"videoId":"([\w-]{11})"', html) or re.search(
+        r'"videoId":"([\w-]{11})"', html
+    )
+    return match.group(1) if match else ""
+
+
 def _open_spotify(query: str) -> str:
     """Open Spotify with a search query."""
     encoded = urllib.parse.quote(query)
+
+    # `start spotify:...` never raises when Spotify is missing -- Windows just
+    # shows "You'll need a new app" -- so check the app is there first.
+    if not _spotify_app_installed():
+        webbrowser.open(SPOTIFY_WEB_URL.format(query=encoded))
+        return f"Spotify app isn't installed, so opened the Spotify Web Player searching for: {query}"
 
     # Try Spotify URI scheme first (opens desktop app if installed)
     try:
@@ -141,18 +183,12 @@ def _open_spotify(query: str) -> str:
 def _open_youtube(query: str) -> str:
     """Open YouTube and force autoplay the first search result."""
     encoded = urllib.parse.quote(query)
-    try:
-        html = urllib.request.urlopen(f"https://www.youtube.com/results?search_query={encoded}").read().decode('utf-8')
-        match = re.search(r'"videoId":"([^"]+)"', html)
-        if match:
-            video_id = match.group(1)
-            url = f"https://www.youtube.com/watch?v={video_id}&autoplay=1"
-            webbrowser.open(url)
-            return f"Opened YouTube auto-playing first result for: {query}"
-    except Exception:
-        pass
+    video_id = youtube_first_video_id(query)
+    if video_id:
+        webbrowser.open(f"https://www.youtube.com/watch?v={video_id}&autoplay=1")
+        return f"Playing the top YouTube result for: {query}"
     # Fallback to search
-    url = YT_URL.format(query=encoded)
+    url = YOUTUBE_URL.format(query=encoded)
     webbrowser.open(url)
     return f"Opened YouTube searching for: {query}"
 
@@ -160,16 +196,10 @@ def _open_youtube(query: str) -> str:
 def _open_youtube_music(query: str) -> str:
     """Open YouTube Music and force autoplay the first search result."""
     encoded = urllib.parse.quote(query)
-    try:
-        html = urllib.request.urlopen(f"https://www.youtube.com/results?search_query={encoded}").read().decode('utf-8')
-        match = re.search(r'"videoId":"([^"]+)"', html)
-        if match:
-            video_id = match.group(1)
-            url = f"https://music.youtube.com/watch?v={video_id}&autoplay=1"
-            webbrowser.open(url)
-            return f"Opened YouTube Music auto-playing first result for: {query}"
-    except Exception:
-        pass
+    video_id = youtube_first_video_id(query)
+    if video_id:
+        webbrowser.open(f"https://music.youtube.com/watch?v={video_id}&autoplay=1")
+        return f"Playing the top YouTube Music result for: {query}"
     # Fallback to search
     url = YT_MUSIC_URL.format(query=encoded)
     webbrowser.open(url)
@@ -177,8 +207,11 @@ def _open_youtube_music(query: str) -> str:
 
 
 def _open_apple_music(query: str) -> str:
+    """Open Apple Music's web search for the query."""
+    encoded = urllib.parse.quote(query)
+    url = APPLE_MUSIC_WEB_URL.format(query=encoded)
     webbrowser.open(url)
-    return f"Opened YouTube searching for: {query}"
+    return f"Opened Apple Music searching for: {query}"
 
 
 def _open_media_player(query: str) -> str:
@@ -188,43 +221,32 @@ def _open_media_player(query: str) -> str:
         import os
         from pathlib import Path
 
-        music_dirs = [
-            Path.home() / "Music",
-            Path("C:/Users") / os.environ.get("USERNAME", "User") / "Music",
-        ]
-
+        music_dir = Path.home() / "Music"
+        words = [w for w in query.lower().split() if len(w) > 2 and w not in {"the", "and", "song", "music"}]
         matched_file: str | None = None
-        query_lower = query.lower()
-        for mdir in music_dirs:
-            if mdir.exists():
-                for f in mdir.rglob("*"):
-                    if f.suffix.lower() in {".mp3", ".flac", ".wav", ".m4a", ".ogg", ".aac"}:
-                        if any(q in f.name.lower() for q in query_lower.split()):
-                            matched_file = str(f)
-                            break
-            if matched_file:
-                break
+        if music_dir.exists() and words:
+            best = 0
+            for f in music_dir.rglob("*"):
+                if f.suffix.lower() not in {".mp3", ".flac", ".wav", ".m4a", ".ogg", ".aac", ".wma"}:
+                    continue
+                name = f.stem.lower()
+                hits = sum(1 for w in words if w in name)
+                # Every distinctive word must match: "any word" played the
+                # first file containing e.g. "love" for any love song.
+                if hits == len(words) and hits > best:
+                    best, matched_file = hits, str(f)
 
         if matched_file:
-            subprocess.Popen(
-                f'start wmplayer "{matched_file}"',
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return f"Playing '{matched_file}' in Windows Media Player."
-        else:
-            subprocess.Popen(
-                "start wmplayer",
-                shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            return (
-                f"Opened Windows Media Player. "
-                f"No local file found for '{query}'. "
-                "You can browse your library manually or try YouTube/Spotify instead."
-            )
+            # The file's default player: Windows 11 no longer ships the
+            # legacy wmplayer that `start wmplayer` relied on.
+            os.startfile(matched_file)  # type: ignore[attr-defined]
+            return f"Playing '{Path(matched_file).name}' from your Music folder."
+        if not music_dir.exists() or not any(music_dir.rglob("*.*")):
+            return "Your Music folder has no songs. Try YouTube Music or Spotify instead."
+        return (
+            f"No song matching '{query}' in your Music folder. "
+            "Try a different title, or play it from YouTube Music or Spotify."
+        )
     else:
         return "Local media player is only supported on Windows. Use spotify or youtube instead."
 

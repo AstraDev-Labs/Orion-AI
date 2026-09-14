@@ -136,7 +136,7 @@ export const SOURCE_CATALOG: ConnectorMeta[] = [
       },
       {
         label: '(Optional) Set the app icon: in the left sidebar click "Basic Information" → scroll to "Display Information" → upload the Orion logo',
-        url: 'https://github.com/open-orion/Orion/blob/main/assets/orion-slack-icon.jpg',
+        url: 'https://github.com/AstraDev-Labs/Orion-AI/blob/main/assets/orion-banner.jpg',
         urlLabel: 'Download icon',
       },
     ],

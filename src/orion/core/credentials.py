@@ -6,6 +6,7 @@ Thread-safe writes via lock. Sets os.environ on save for immediate effect.
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 from pathlib import Path
@@ -22,9 +23,9 @@ TOOL_CREDENTIALS: dict[str, list[str]] = {
     "web_search": ["TAVILY_API_KEY"],
     "image_generate": ["OPENAI_API_KEY"],
     "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
-    "telegram": ["TELEGRAM_BOT_TOKEN"],
-    "discord": ["DISCORD_BOT_TOKEN"],
-    "email": ["EMAIL_USERNAME", "EMAIL_PASSWORD"],
+    "telegram": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_NOTIFY_CHAT_ID"],
+    "discord": ["DISCORD_BOT_TOKEN", "DISCORD_OWNER_USER_ID"],
+    "email": ["EMAIL_USERNAME", "EMAIL_PASSWORD", "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT"],
     "whatsapp": ["WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"],
     "signal": ["SIGNAL_CLI_PATH"],
     "google_chat": ["GOOGLE_CHAT_WEBHOOK_URL"],
@@ -81,18 +82,39 @@ def save_credential(
         if tool_name not in creds:
             creds[tool_name] = {}
         creds[tool_name][key] = stripped
-
-        p.parent.mkdir(parents=True, exist_ok=True)
-        lines: list[str] = []
-        for section, kvs in creds.items():
-            lines.append(f"[{section}]")
-            for k, v in kvs.items():
-                lines.append(f'{k} = "{v}"')
-            lines.append("")
-        p.write_text("\n".join(lines))
-        os.chmod(p, 0o600)
+        _write_credentials(p, creds)
 
     os.environ[key] = stripped
+
+
+def _write_credentials(p: Path, creds: dict[str, dict[str, str]]) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[str] = []
+    for section, kvs in creds.items():
+        if not kvs:
+            continue
+        lines.append(f"[{section}]")
+        for k, v in kvs.items():
+            # json.dumps escapes quotes/backslashes into valid TOML basic
+            # strings; a raw f-string corrupted the file on a `"` in a secret.
+            lines.append(f"{k} = {json.dumps(v)}")
+        lines.append("")
+    p.write_text("\n".join(lines), encoding="utf-8")
+    os.chmod(p, 0o600)
+
+
+def delete_credentials(tool_name: str, keys: list[str], *, path: Path | None = None) -> None:
+    """Remove saved keys for a tool from the file and from the running process."""
+    p = Path(path) if path else _DEFAULT_PATH
+    with _LOCK:
+        creds = load_credentials(path=p)
+        section = creds.get(tool_name, {})
+        for key in keys:
+            section.pop(key, None)
+            os.environ.pop(key, None)
+        if not section:
+            creds.pop(tool_name, None)
+        _write_credentials(p, creds)
 
 
 def get_credential_status(tool_name: str) -> dict[str, bool]:

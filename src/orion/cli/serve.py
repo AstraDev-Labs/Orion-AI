@@ -23,6 +23,109 @@ from orion.intelligence import (
 logger = logging.getLogger(__name__)
 
 
+KEEP_WARM_INTERVAL_S = 20 * 60
+
+
+def _preloadable(engine, model: str):
+    """The engine under telemetry/guardrail/multi-engine wrappers that can preload."""
+    current = engine
+    for _ in range(8):
+        if current is None:
+            return None
+        if callable(getattr(current, "preload", None)):
+            return current
+        route = getattr(current, "_engine_for", None)
+        if callable(route):
+            try:
+                current = route(model)
+            except Exception:
+                return None
+            continue
+        current = getattr(current, "_inner", None) or getattr(current, "_engine", None)
+    return None
+
+
+def start_keep_warm(engine, model: str, config, *, memory_backend=None, speech_backend=None):
+    """Load the chat model, memory embedder and speech recognition now, then
+    keep the model loaded while the server runs.
+
+    Ollama unloads an idle model after keep_alive; reloading qwen3.5:4b took
+    9-13 s on a 4 GB laptop GPU, so the first reply after any pause started
+    that late, and the first request after launch paid every load at once.
+    Returns the thread, or None when there is nothing to warm.
+    """
+    import threading
+    import time
+
+    ollama = _preloadable(engine, model) if model else None
+    ollama_cfg = getattr(getattr(config, "engine", None), "ollama", None)
+    keep_warm = bool(getattr(ollama_cfg, "keep_warm", True))
+    if ollama is None and memory_backend is None and speech_backend is None:
+        return None
+
+    def _warm_once() -> None:
+        if ollama is not None:
+            ollama.preload(model)
+        if memory_backend is not None:
+            try:
+                memory_backend.retrieve("warm up", top_k=1)
+            except Exception as exc:
+                logger.debug("Memory warm-up failed: %s", exc)
+
+    def _run() -> None:
+        started = time.monotonic()
+        _warm_once()
+        if speech_backend is not None and callable(getattr(speech_backend, "_ensure_model", None)):
+            try:
+                speech_backend._ensure_model()
+            except Exception as exc:
+                logger.debug("Speech recognition warm-up failed: %s", exc)
+        logger.info("Models warmed in %.1fs", time.monotonic() - started)
+        while keep_warm and ollama is not None:
+            time.sleep(KEEP_WARM_INTERVAL_S)
+            _warm_once()
+
+    thread = threading.Thread(target=_run, name="keep-warm", daemon=True)
+    thread.start()
+    return thread
+
+
+def wire_tool_dependencies(
+    tool,
+    *,
+    engine=None,
+    model: str = "",
+    memory_backend=None,
+    knowledge_graph=None,
+    channel=None,
+):
+    """Hand a freshly constructed tool the live backends it needs.
+
+    Tools are registered as classes and built with no arguments, so anything
+    they talk to -- the memory store, the knowledge graph, the engine, the
+    chat channel -- has to be attached afterwards. Returns the tool.
+    """
+    try:
+        name = tool.spec.name
+    except Exception:
+        return tool
+    if name == "llm":
+        if hasattr(tool, "_engine") and engine is not None:
+            tool._engine = engine
+        if hasattr(tool, "_model") and model:
+            tool._model = model
+    elif name == "retrieval" or name.startswith("memory_"):
+        if hasattr(tool, "_backend") and getattr(tool, "_backend", None) is None:
+            tool._backend = memory_backend
+    elif name.startswith("kg_"):
+        if hasattr(tool, "_backend") and getattr(tool, "_backend", None) is None:
+            tool._backend = knowledge_graph
+    elif name.startswith("channel_"):
+        if hasattr(tool, "_channel") and getattr(tool, "_channel", None) is None:
+            tool._channel = channel
+    return tool
+
+
 @click.command()
 @click.option("--host", default=None, help="Bind address (default: config).")
 @click.option(
@@ -48,6 +151,15 @@ def serve(
     agent_name: str | None,
 ) -> None:
     """Start the OpenAI-compatible API server."""
+    # Set before anything below can import orion.tools: its __init__.py only
+    # glob-loads approved generated tools (tools/generated/*.py) when this is
+    # "1", so that AI-authored code only actually runs in the real server
+    # process it was approved for, not in every test suite or CLI subcommand
+    # that happens to import orion.tools.
+    import os
+
+    os.environ["ORION_LOAD_GENERATED_TOOLS"] = "1"
+
     console = Console(stderr=True)
 
     # Check for server dependencies
@@ -63,6 +175,16 @@ def serve(
         sys.exit(1)
 
     config = load_config()
+
+    # Keys and tokens saved from the Connections screen live in
+    # ~/.orion/credentials.toml; nothing loaded them before, so a saved bot
+    # token or API key was silently ignored by the channels and tools.
+    try:
+        from orion.core.credentials import inject_credentials
+
+        inject_credentials()
+    except Exception as exc:
+        logger.warning("Could not load saved credentials: %s", exc)
 
     # Resolve host/port from CLI args or config
     bind_host = host or config.server.host
@@ -170,6 +292,30 @@ def serve(
             console.print("[red]No model available on engine.[/red]")
             sys.exit(1)
 
+    # Memory and knowledge-graph backends are created before the agent so its
+    # tools can be connected to them. They used to be created afterwards and
+    # never handed to the tools, so in the running server every memory_*,
+    # kg_*, retrieval and llm call answered "No memory backend configured".
+    memory_backend = None
+    try:
+        import orion.tools.storage  # noqa: F401
+        from orion.core.registry import MemoryRegistry
+
+        mem_key = config.memory.default_backend
+        if MemoryRegistry.contains(mem_key):
+            memory_backend = MemoryRegistry.create(mem_key, db_path=config.memory.db_path)
+            console.print("  Memory:    [cyan]active[/cyan]")
+    except Exception as exc:
+        logger.warning("Memory backend init failed: %s", exc)
+
+    knowledge_graph = None
+    try:
+        from orion.tools.storage.knowledge_graph import KnowledgeGraphMemory
+
+        knowledge_graph = KnowledgeGraphMemory()
+    except Exception as exc:
+        logger.warning("Knowledge graph init failed: %s", exc)
+
     # Resolve agent
     agent = None
     agent_key = agent_name or config.server.agent
@@ -191,33 +337,36 @@ def serve(
                     from orion.core.registry import ToolRegistry
                     from orion.tools._stubs import BaseTool
 
-                    _DEFAULT_TOOLS = {"calculator", "web_search"}
-                    configured = config.agent.tools
-                    if configured:
-                        if isinstance(configured, list):
-                            allowed = {
-                                t.strip()
-                                for t in configured
-                                if isinstance(t, str) and t.strip()
-                            }
-                        else:
-                            allowed = {
-                                t.strip() for t in configured.split(",") if t.strip()
-                            }
-                    else:
-                        allowed = _DEFAULT_TOOLS
+                    from orion.core.tool_names import enabled_tool_names
+
+                    # Unset means every tool (see core/tool_names.py).
+                    allowed = set(enabled_tool_names(config.agent.tools, ToolRegistry.keys()))
 
                     tools = []
                     for name in ToolRegistry.keys():
                         if name not in allowed:
                             continue
                         tool_cls = ToolRegistry.get(name)
-                        if isinstance(tool_cls, type) and issubclass(
-                            tool_cls, BaseTool
-                        ):
-                            tools.append(tool_cls())
-                        elif isinstance(tool_cls, BaseTool):
-                            tools.append(tool_cls)
+                        try:
+                            if isinstance(tool_cls, type) and issubclass(
+                                tool_cls, BaseTool
+                            ):
+                                tools.append(tool_cls())
+                            elif isinstance(tool_cls, BaseTool):
+                                tools.append(tool_cls)
+                        except Exception as exc:
+                            # With every tool enabled by default, one that
+                            # cannot start (missing optional package) must
+                            # not take the rest down with it.
+                            logger.warning("Tool %s unavailable: %s", name, exc)
+                    for _tool in tools:
+                        wire_tool_dependencies(
+                            _tool,
+                            engine=engine,
+                            model=model_name,
+                            memory_backend=memory_backend,
+                            knowledge_graph=knowledge_graph,
+                        )
                     if tools:
                         agent_kwargs["tools"] = tools
 
@@ -225,6 +374,12 @@ def serve(
                     agent_kwargs["max_turns"] = config.agent.max_turns
 
                 agent = agent_cls(engine, model_name, **agent_kwargs)
+                # The server has no terminal to confirm in: confirmation-
+                # required tools (shell_exec, git_commit) go to the approval
+                # queue, and run when the user answers yes.
+                _executor = getattr(agent, "_executor", None)
+                if _executor is not None:
+                    _executor._approval_queue = True
         except Exception as exc:
             import traceback
 
@@ -243,6 +398,12 @@ def serve(
             channel_bridge = sb._resolve_channel(config, bus)
             if channel_bridge is not None:
                 channel_bridge.connect()
+                # Publish the connected instance so outbound sends (approved
+                # queue_action items) reuse this exact live connection rather
+                # than constructing a dead one -- see orion.channels.live.
+                from orion.channels.live import register_live_channel
+
+                register_live_channel(config.channel.default_channel, channel_bridge)
                 console.print(
                     f"  Channel: [cyan]{config.channel.default_channel}[/cyan]"
                 )
@@ -269,30 +430,25 @@ def serve(
                         from orion.core.registry import ToolRegistry
                         from orion.tools._stubs import BaseTool
 
-                        _DEFAULT_TOOLS = {"calculator", "web_search"}
-                        configured = config.agent.tools
-                        if configured:
-                            if isinstance(configured, list):
-                                _allowed = {
-                                    t.strip()
-                                    for t in configured
-                                    if isinstance(t, str) and t.strip()
-                                }
-                            else:
-                                _allowed = {
-                                    t.strip()
-                                    for t in configured.split(",")
-                                    if t.strip()
-                                }
-                        else:
-                            _allowed = _DEFAULT_TOOLS
+                        from orion.core.tool_names import enabled_tool_names
+
+                        _allowed = set(enabled_tool_names(config.agent.tools, ToolRegistry.keys()))
 
                         for _tname in ToolRegistry.keys():
                             if _tname not in _allowed:
                                 continue
                             _tcls = ToolRegistry.get(_tname)
                             if isinstance(_tcls, type) and issubclass(_tcls, BaseTool):
-                                _channel_tools.append(_tcls())
+                                _channel_tools.append(
+                                    wire_tool_dependencies(
+                                        _tcls(),
+                                        engine=engine,
+                                        model=model_name,
+                                        memory_backend=memory_backend,
+                                        knowledge_graph=knowledge_graph,
+                                        channel=channel_bridge,
+                                    )
+                                )
                             elif isinstance(_tcls, BaseTool):
                                 _channel_tools.append(_tcls)
             except Exception as exc:
@@ -319,6 +475,32 @@ def serve(
             console.print(f"  Speech: [cyan]{speech_backend.backend_id}[/cyan]")
     except Exception as exc:
         logger.debug("Speech backend discovery failed: %s", exc)
+
+    # Set up TTS backend (local-first -- see speech/_tts_discovery.py)
+    tts_backend = None
+    try:
+        from orion.speech._tts_discovery import get_tts_backend, is_local
+
+        tts_backend = get_tts_backend(config)
+        if tts_backend:
+            where = "local" if is_local(tts_backend.backend_id) else "CLOUD"
+            console.print(f"  Voice:  [cyan]{tts_backend.backend_id}[/cyan] ({where})")
+
+            # Load the voice model now, in the background, instead of on the
+            # first spoken reply -- a cold Kokoro load made that reply ~20 s late.
+            import threading
+
+            def _warm_tts(backend=tts_backend) -> None:
+                try:
+                    backend.synthesize("Ready.")
+                except Exception as exc:
+                    logger.debug("TTS warm-up failed: %s", exc)
+
+            threading.Thread(target=_warm_tts, name="tts-warmup", daemon=True).start()
+    except Exception as exc:
+        logger.debug("TTS backend discovery failed: %s", exc)
+
+    start_keep_warm(engine, model_name, config, memory_backend=memory_backend, speech_backend=speech_backend)
 
     # Create app
     from orion.server.app import create_app
@@ -380,23 +562,6 @@ def serve(
             console.print("  Scheduler: [cyan]active[/cyan]")
         except Exception as exc:
             logger.debug("Agent scheduler init failed: %s", exc)
-
-    # Set up memory backend for context injection
-    memory_backend = None
-    if config.agent.context_from_memory:
-        try:
-            import orion.tools.storage  # noqa: F401
-            from orion.core.registry import MemoryRegistry
-
-            mem_key = config.memory.default_backend
-            if MemoryRegistry.contains(mem_key):
-                memory_backend = MemoryRegistry.create(
-                    mem_key,
-                    db_path=config.memory.db_path,
-                )
-                console.print("  Memory:    [cyan]active[/cyan]")
-        except Exception as exc:
-            logger.debug("Memory backend init failed: %s", exc)
 
     # --- Channel Gateway: API key, sessions, ChannelBridge ---
     import os as _os
@@ -472,6 +637,7 @@ def serve(
         config=config,
         memory_backend=memory_backend,
         speech_backend=speech_backend,
+        tts_backend=tts_backend,
         agent_manager=agent_manager,
         agent_scheduler=agent_scheduler,
         api_key=api_key,

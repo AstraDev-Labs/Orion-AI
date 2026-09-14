@@ -7,7 +7,6 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional
-from orion.evals.core.types import RunSummary
 
 import click
 from rich.console import Console
@@ -28,6 +27,7 @@ from orion.evals.core.display import (
     print_subject_table,
     print_suite_summary,
 )
+from orion.evals.core.types import RunSummary
 
 LOGGER = logging.getLogger(__name__)
 

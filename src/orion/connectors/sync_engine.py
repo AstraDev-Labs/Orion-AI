@@ -189,4 +189,25 @@ class SyncEngine:
         self._conn.commit()
 
 
+    def close(self) -> None:
+        """Release the checkpoint database connection.
+
+        Without this the handle stays open for the life of the process, which
+        leaks file descriptors and -- on Windows -- prevents the containing
+        directory from being deleted while the engine is alive.
+        """
+        conn = getattr(self, "_conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            finally:
+                self._conn = None
+
+    def __enter__(self) -> "SyncEngine":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
 __all__ = ["SyncEngine"]

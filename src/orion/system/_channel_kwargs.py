@@ -15,7 +15,12 @@ def _telegram(c: Any) -> Dict[str, Any]:
 
 
 def _discord(c: Any) -> Dict[str, Any]:
-    return {"bot_token": c.bot_token} if c.bot_token else {}
+    kw: Dict[str, Any] = {}
+    if c.bot_token:
+        kw["bot_token"] = c.bot_token
+    if getattr(c, "owner_user_id", ""):
+        kw["owner_user_id"] = c.owner_user_id
+    return kw
 
 
 def _slack(c: Any) -> Dict[str, Any]:

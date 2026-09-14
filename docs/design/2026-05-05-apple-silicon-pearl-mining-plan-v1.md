@@ -1599,7 +1599,7 @@ Session
 | `maturin build` complains about `tikv-jemallocator` | macOS SDK too old | Update macOS / Xcode |
 
 For anything not on this list, capture `~/.orion/logs/mining/` and open
-an issue at https://github.com/open-orion/Orion/issues.
+an issue at https://github.com/AstraDev-Labs/Orion/issues.
 
 ## What changes in v2 / v3
 

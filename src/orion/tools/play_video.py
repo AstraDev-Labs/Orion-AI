@@ -10,6 +10,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import urllib.parse
+import urllib.request
 import webbrowser
 from typing import Any
 
@@ -45,9 +46,28 @@ def _build_query(title: str | None, genre: str | None) -> str:
     return " ".join(parts)
 
 
+def _open_youtube_autoplay(query: str) -> str:
+    """Open YouTube and auto-play the first search result (unlike other
+    streaming platforms, YouTube's public search page can be read for a video
+    id; Netflix, Prime and the rest keep their catalogs behind sign-in, so they
+    stay search-only below)."""
+    from orion.tools.play_music import youtube_first_video_id
+
+    video_id = youtube_first_video_id(query)
+    if video_id:
+        webbrowser.open(f"https://www.youtube.com/watch?v={video_id}&autoplay=1")
+        return f"Playing the top YouTube result for: {query}"
+    encoded = urllib.parse.quote(query)
+    webbrowser.open(f"https://www.youtube.com/results?search_query={encoded}")
+    return f"Opened YouTube searching for: {query}"
+
+
 def _open_platform(platform: str, query: str) -> str:
     """Open the specified platform with a search query."""
     encoded = urllib.parse.quote(query)
+
+    if platform == "youtube":
+        return _open_youtube_autoplay(query)
 
     # Check if we should try a native Windows URI first
     if platform == "apple_tv":

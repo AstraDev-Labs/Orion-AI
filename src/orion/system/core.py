@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from orion.core.config import OrionConfig
-from orion.core.events import EventBus
+from orion.core.events import EventBus, EventType
 from orion.core.types import Message, Role
 from orion.engine._stubs import InferenceEngine
 from orion.system.bundles import (
@@ -47,6 +49,15 @@ if TYPE_CHECKING:
     from orion.workflow.engine import WorkflowEngine
 
 logger = logging.getLogger(__name__)
+
+# Human-readable channel names for the auto-reply prompt.
+_CHANNEL_LABELS = {
+    "whatsapp_baileys": "WhatsApp",
+    "whatsapp": "WhatsApp",
+    "telegram": "Telegram",
+    "discord": "Discord",
+    "slack": "Slack",
+}
 
 
 @dataclass
@@ -199,8 +210,19 @@ class OrionSystem:
             A connected :class:`~orion.channels._stubs.BaseChannel`
             instance whose ``on_message`` method accepts a callable.
         """
+        from orion.core.activity import is_user_away
+        from orion.core.auto_reply import build_auto_reply_prompt
+        from orion.core.message_priority import PRIORITY_EMERGENCY, classify_priority
+        from orion.core.notify import notify_telegram
         from orion.core.types import Message
         from orion.sessions.session import SessionStore
+
+        away_idle_minutes = getattr(self.config.channel, "away_idle_minutes", 10.0)
+        owner_name = getattr(self.config.channel, "owner_name", "") or "the user"
+        assistant_name = (
+            getattr(self.config.channel.whatsapp_baileys, "assistant_name", "")
+            or "Orion"
+        )
 
         if self.session_store is None:
             from pathlib import Path
@@ -213,6 +235,46 @@ class OrionSystem:
 
         _system = self  # capture for closure
 
+        # Bounded so a burst of inbound messages can't spawn unbounded
+        # concurrent inferences against a single local model.
+        _reply_pool = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="channel-reply",
+        )
+
+        def _is_group_conversation(cm) -> bool:
+            """Best-effort group-chat detection."""
+            channel, conversation_id = cm.channel, cm.conversation_id
+            if channel == "whatsapp_baileys":
+                return conversation_id.endswith("@g.us")
+            if channel == "telegram":
+                # Telegram represents group/supergroup chat ids as negative integers.
+                try:
+                    return int(conversation_id) < 0
+                except ValueError:
+                    return False
+            if channel == "discord":
+                # Anything outside a direct message is a server channel.
+                return not bool((cm.metadata or {}).get("is_dm"))
+            return False
+
+        def _may_auto_reply(cm, is_group: bool) -> bool:
+            """Whether Orion should answer *cm* on the user's behalf.
+
+            The rule differs per platform because "a group" means different
+            things. A WhatsApp group is a private conversation among people
+            who all know each other, and the user asked never to have Orion
+            speak there. A Discord server channel is public and high-traffic:
+            a bot sees every message it can read, so replying to all of them
+            would spam strangers -- but staying silent when the user is
+            @mentioned would defeat the point. So Discord answers only when
+            addressed, whereas WhatsApp groups stay silent unconditionally.
+            """
+            if cm.channel == "discord":
+                md = cm.metadata or {}
+                return bool(md.get("is_dm") or md.get("mentions_owner"))
+            return not is_group
+
         def _on_channel_message(cm) -> None:
             session_key = f"{cm.channel}:{cm.conversation_id}"
             session = _system.session_store.get_or_create(
@@ -221,6 +283,70 @@ class OrionSystem:
                 channel_user_id=cm.sender,
             )
 
+            received_at = time.time()
+            priority = classify_priority(cm.content)
+            away = is_user_away(away_idle_minutes)
+            is_group = _is_group_conversation(cm)
+
+            # Every inbound message gets a desktop-toast notification
+            # regardless of away state -- it's useful even when the user is
+            # active in some other app. Only auto-reply is gated on `away`.
+            try:
+                _system.bus.publish(
+                    EventType.CHANNEL_MESSAGE_NOTIFY,
+                    {
+                        "channel": cm.channel,
+                        "sender": cm.sender,
+                        "preview": cm.content[:280],
+                        "priority": priority,
+                        "away": away,
+                        "is_group": is_group,
+                        "conversation_id": cm.conversation_id,
+                    },
+                )
+            except Exception:
+                logger.debug("Notify publish failed", exc_info=True)
+
+            if priority == PRIORITY_EMERGENCY and away:
+                notify_telegram(
+                    f"[EMERGENCY] {cm.channel} message from {cm.sender}:\n{cm.content[:500]}"
+                )
+
+            try:
+                _system.session_store.save_message(
+                    session.session_id,
+                    "user",
+                    cm.content,
+                    channel=cm.channel,
+                )
+            except Exception:
+                logger.debug("Session save error", exc_info=True)
+
+            # Auto-reply only while the user is away, only where the
+            # platform's rules allow it (see _may_auto_reply), only while the
+            # user hasn't turned it off entirely, and only for senders on the
+            # allowlist when one is configured. Read live off `_system.config`
+            # rather than captured once at wire-up time, so the Governance UI's
+            # toggle/allowlist take effect without a backend restart.
+            if not away or not _may_auto_reply(cm, is_group):
+                return
+            if not getattr(_system.config.channel, "auto_reply_enabled", True):
+                return
+            allowlist_raw = getattr(_system.config.channel, "auto_reply_allowlist", "") or ""
+            allowlist = {c.strip() for c in allowlist_raw.split(",") if c.strip()}
+            if allowlist and cm.sender not in allowlist:
+                return
+
+            # Generating a reply is slow (a local model can take a minute or
+            # more), and this handler runs inline on the channel's own reader
+            # thread. Blocking it stops that thread from draining the bridge's
+            # stdout pipe; once the OS buffer fills, the bridge process blocks
+            # on its next write and the whole connection silently freezes --
+            # observed here as "messages just stopped arriving". Do the slow
+            # work on a background pool so the reader keeps consuming.
+            _reply_pool.submit(_generate_and_send_reply, cm, session, priority, received_at)
+
+        def _generate_and_send_reply(cm, session, priority: str, received_at: float) -> None:
             prior_msgs: List[Message] = []
             for sm in session.messages:
                 try:
@@ -231,32 +357,28 @@ class OrionSystem:
 
             reply = ""
             try:
-                if _system.agent_name and _system.agent_name != "none":
-                    result = _system.ask(
-                        cm.content,
-                        context=False,
-                        agent=_system.agent_name,
-                        prior_messages=prior_msgs,
-                    )
-                    reply = result.get("content", "")
-                else:
-                    result = _system.ask(
-                        cm.content,
-                        context=False,
-                        prior_messages=prior_msgs,
-                    )
-                    reply = result.get("content", "")
+                # Deliberately no agent and no tools here. The reply goes to a
+                # third party, so the model's only job is to answer what they
+                # asked on the owner's behalf -- handing it a tool belt just
+                # invites it to "perform" tasks it cannot do and then report
+                # fabricated results to a contact.
+                result = _system.ask(
+                    cm.content,
+                    context=False,
+                    system_prompt=build_auto_reply_prompt(
+                        owner=owner_name,
+                        assistant=assistant_name,
+                        channel=_CHANNEL_LABELS.get(cm.channel, cm.channel),
+                        priority=priority,
+                    ),
+                    prior_messages=prior_msgs,
+                )
+                reply = result.get("content", "")
             except Exception:
                 logger.exception("Channel message handler error")
-                reply = "Sorry, I encountered an error processing your message."
+                reply = ""  # stay silent rather than send an error to a contact
 
             try:
-                _system.session_store.save_message(
-                    session.session_id,
-                    "user",
-                    cm.content,
-                    channel=cm.channel,
-                )
                 _system.session_store.save_message(
                     session.session_id,
                     "assistant",
@@ -266,15 +388,31 @@ class OrionSystem:
             except Exception:
                 logger.debug("Session save error", exc_info=True)
 
-            if reply:
-                try:
-                    channel_bridge.send(
-                        cm.channel,
-                        reply,
-                        conversation_id=cm.conversation_id,
-                    )
-                except Exception:
-                    logger.exception("Channel send error")
+            if not reply:
+                return
+
+            # Re-check right before sending, not just at receipt: generating
+            # a reply can take a minute or more on a local model, plenty of
+            # time for the owner to come back to their desktop or reply to
+            # the message themselves from their phone. Sending a stale
+            # auto-reply after either of those happened is exactly the
+            # "still auto-replies after I've already seen/answered it" bug.
+            if not is_user_away(away_idle_minutes):
+                logger.info("Owner returned before auto-reply was ready -- not sending")
+                return
+            owner_replied_since = getattr(channel_bridge, "owner_replied_since", None)
+            if owner_replied_since is not None and owner_replied_since(cm.conversation_id, received_at):
+                logger.info("Owner already replied in %s -- not sending auto-reply", cm.conversation_id)
+                return
+
+            try:
+                channel_bridge.send(
+                    cm.channel,
+                    reply,
+                    conversation_id=cm.conversation_id,
+                )
+            except Exception:
+                logger.exception("Channel send error")
 
         channel_bridge.on_message(_on_channel_message)
 

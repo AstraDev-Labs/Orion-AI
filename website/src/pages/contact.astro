@@ -1,0 +1,64 @@
+---
+import SiteLayout from '../layouts/SiteLayout.astro';
+import ContactForm from '../components/ContactForm.tsx';
+import { CONTACT_EMAIL, ISSUES_URL, NEW_ISSUE_URL, REPO_URL, url } from '../lib/site';
+
+const options = [
+  {
+    title: 'Report a bug',
+    body: 'Something broke? Tell us what you did, what happened, and attach setup.log from the install folder if setup failed.',
+    href: `${NEW_ISSUE_URL}?labels=bug`,
+    cta: 'Open a bug report',
+  },
+  {
+    title: 'Suggest a feature',
+    body: 'Public ideas on the wishlist can be voted on by everyone.',
+    href: url('/wishlist'),
+    cta: 'Go to the wishlist',
+  },
+  {
+    title: 'Security issue',
+    body: 'Please report vulnerabilities privately, not in a public issue.',
+    href: `${REPO_URL}/security/advisories/new`,
+    cta: 'Report privately',
+  },
+  {
+    title: 'Browse known issues',
+    body: 'See whether a problem is already reported, and follow its fix.',
+    href: ISSUES_URL,
+    cta: 'Browse issues',
+  },
+];
+---
+
+<SiteLayout title="Contact" description="Report a bug, suggest a feature, or get in touch about Orion.">
+  <section class="container-site max-w-4xl pb-10 pt-16 sm:pt-20">
+    <p class="eyebrow">Contact</p>
+    <h1 class="display mt-4 text-4xl font-bold text-white sm:text-5xl">Get in touch</h1>
+    <p class="mt-5 max-w-2xl text-lg text-[var(--color-muted)]">
+      Questions, feedback, bug reports, press or collaboration: send a message and it goes straight to Orion’s inbox.
+    </p>
+
+    <div class="mt-10">
+      <ContactForm client:visible email={CONTACT_EMAIL} privacyHref={url('/privacy')} />
+    </div>
+    <p class="mt-4 text-sm text-[var(--color-faint)]">
+      Prefer your own email app? Write to <a class="text-[var(--color-cyan-soft)] underline" href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+    </p>
+
+    <h2 class="mt-16 text-xl font-semibold text-white">Or use GitHub</h2>
+    <p class="mt-2 text-sm text-[var(--color-muted)]">Public issues let others follow a fix and add details.</p>
+    <div class="mt-6 grid gap-5 sm:grid-cols-2">
+      {
+        options.map((o) => (
+          <a href={o.href} class="panel block p-6 transition-colors hover:border-[var(--color-line-strong)]">
+            <h2 class="text-lg font-semibold text-white">{o.title}</h2>
+            <p class="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">{o.body}</p>
+            <span class="mt-4 inline-block text-sm font-medium text-[var(--color-cyan-soft)]">{o.cta} →</span>
+          </a>
+        ))
+      }
+    </div>
+    <p class="mt-10 text-sm text-[var(--color-faint)]">GitHub issues need a free GitHub account. Before reporting, check the <a class="text-[var(--color-cyan-soft)] underline" href={url('/faq')}>FAQ</a> and <a class="text-[var(--color-cyan-soft)] underline" href={url('/docs/troubleshooting')}>troubleshooting guide</a>.</p>
+  </section>
+</SiteLayout>

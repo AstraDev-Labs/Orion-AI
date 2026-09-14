@@ -53,6 +53,7 @@ class LearningOrchestrator:
         min_quality: float = 0.7,
         lora_config: Optional[Any] = None,
         model_name: Optional[str] = None,
+        enable_domain_research: bool = False,
     ) -> None:
         from orion.learning.agents.agent_evolver import AgentConfigEvolver
         from orion.learning.training.data import TrainingDataMiner
@@ -64,6 +65,7 @@ class LearningOrchestrator:
         self._min_sft_pairs = min_sft_pairs
         self._lora_config = lora_config
         self._model_name = model_name
+        self._enable_domain_research = enable_domain_research
 
         self._miner = TrainingDataMiner(trace_store, min_quality=min_quality)
         self._evolver = AgentConfigEvolver(trace_store, config_dir=self._config_dir)
@@ -129,7 +131,25 @@ class LearningOrchestrator:
         routing_pairs = self._miner.extract_routing_pairs(agent=agent_id)
         agent_pairs = self._miner.extract_agent_config_pairs(agent=agent_id)
 
+        # 1b. Real web-sourced pairs on top of conversation-mined ones --
+        # see domain_research.py. Tagged distinctly in metadata.source so
+        # callers can always tell "learned from talking to you" apart from
+        # "learned from the web" rather than conflating the two. Best-effort:
+        # a failure here (no network, no memory graph yet, bad model output)
+        # must never block the conversation-derived learning cycle.
+        web_pairs: list = []
+        if self._enable_domain_research:
+            try:
+                from orion.core.config import load_config
+                from orion.learning.domain_research import run_research_cycle
+
+                web_pairs = run_research_cycle(config=load_config())
+            except Exception:
+                logger.warning("Domain research cycle failed", exc_info=True)
+        sft_pairs = sft_pairs + web_pairs
+
         result["sft_pairs"] = len(sft_pairs)
+        result["web_sft_pairs"] = len(web_pairs)
         result["routing_classes"] = len(routing_pairs)
         result["agent_classes"] = len(agent_pairs)
 

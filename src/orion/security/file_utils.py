@@ -21,12 +21,30 @@ def secure_mkdir(path: Path, mode: int = 0o700) -> Path:
     return path
 
 
+def is_sqlite_special(path: Path | str) -> bool:
+    """True for SQLite targets that are not real filesystem paths.
+
+    ``":memory:"`` and ``file:...`` URIs are sentinels sqlite3 interprets
+    itself; they never name a file on disk.
+    """
+    text = str(path)
+    return text == ":memory:" or text.startswith("file:")
+
+
 def secure_create(path: Path, mode: int = 0o600) -> Path:
     """Ensure a file exists with restrictive permissions.
 
     Creates the parent directory with ``0o700`` if needed, touches the
     file if it doesn't exist, and sets *mode* on it.
+
+    SQLite sentinels (``":memory:"``, ``file:`` URIs) are returned
+    untouched: they name no file. Creating them is wrong everywhere --
+    on POSIX it silently drops a junk file called ``:memory:`` in the
+    working directory, and on Windows the colon is an illegal filename
+    character, so it raises OSError and takes the caller down with it.
     """
+    if is_sqlite_special(path):
+        return path
     secure_mkdir(path.parent, mode=0o700)
     if not path.exists():
         path.touch()

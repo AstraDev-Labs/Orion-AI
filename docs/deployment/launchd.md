@@ -7,7 +7,7 @@ Orion includes a launchd property list (plist) for running the API server as a b
 Before installing the service, ensure that Orion is installed and the `orion` command is available at `/usr/local/bin/orion`. If you installed via `uv` or `pip` with a different prefix, adjust the path in the plist accordingly.
 
 ```bash
-git clone https://github.com/open-orion/Orion.git && cd Orion && uv sync --extra server
+git clone https://github.com/AstraDev-Labs/Orion-AI.git && cd Orion && uv sync --extra server
 which orion  # Verify the installation path
 ```
 

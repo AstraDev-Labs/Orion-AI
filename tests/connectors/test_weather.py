@@ -94,3 +94,11 @@ def test_sync_yields_two_documents(connector):
 def test_disconnect(connector):
     connector.disconnect()
     assert connector.is_connected() is False
+
+
+def test_units_follow_the_country():
+    from orion.connectors.weather import _units_for
+
+    assert _units_for("Palayamkottai,IN") == ("metric", "°C", "m/s")
+    assert _units_for("Chennai") == ("metric", "°C", "m/s")
+    assert _units_for("Austin,TX,US") == ("imperial", "°F", "mph")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,15 @@ from typing import Any
 from orion.core.registry import ToolRegistry, TTSRegistry
 from orion.core.types import ToolResult
 from orion.tools._stubs import BaseTool, ToolSpec
+
+
+def _configured_tts_backend() -> str:
+    try:
+        from orion.core.config import load_config
+
+        return (getattr(load_config().tts, "backend", "") or "kokoro").strip()
+    except Exception:
+        return "kokoro"
 
 
 @ToolRegistry.register("text_to_speech")
@@ -39,7 +49,20 @@ class TextToSpeechTool(BaseTool):
                     },
                     "backend": {
                         "type": "string",
-                        "description": "TTS backend (cartesia, kokoro, openai_tts).",
+                        "description": (
+                            "TTS backend. Local: 'kokoro' (fast, flat delivery), "
+                            "'chatterbox' (expressive, supports emotion). "
+                            "Cloud: 'cartesia', 'openai_tts', 'elevenlabs'."
+                        ),
+                    },
+                    "emotion": {
+                        "type": "string",
+                        "description": (
+                            "Emotional tone to speak with: neutral, calm, soft, warm, "
+                            "happy, excited, sad, serious, urgent. Only the 'chatterbox' "
+                            "backend renders this; other backends ignore it. Pick the "
+                            "tone that fits what is being said."
+                        ),
                     },
                     "output_dir": {
                         "type": "string",
@@ -58,7 +81,9 @@ class TextToSpeechTool(BaseTool):
 
         text = params.get("text", "")
         voice_id = params.get("voice_id", "")
-        backend_key = params.get("backend", "cartesia")
+        # Default to the voice configured for Orion ([tts] backend, local-first)
+        # rather than Cartesia, a cloud service that needs its own API key.
+        backend_key = params.get("backend") or _configured_tts_backend()
         _ALIASES = {"openai": "openai_tts"}
         backend_key = _ALIASES.get(backend_key, backend_key)
         output_dir = params.get("output_dir", "")
@@ -81,7 +106,19 @@ class TextToSpeechTool(BaseTool):
         backend_cls = TTSRegistry.get(backend_key)
         backend = backend_cls()
 
-        result = backend.synthesize(text, voice_id=voice_id, speed=speed)
+        # Only forward `emotion` to backends whose synthesize() accepts it --
+        # kokoro/cartesia/etc. would raise TypeError on an unexpected kwarg.
+        call_kwargs: dict[str, Any] = {"voice_id": voice_id, "speed": speed}
+        emotion = params.get("emotion", "")
+        if emotion:
+            try:
+                accepted = inspect.signature(backend.synthesize).parameters
+                if "emotion" in accepted:
+                    call_kwargs["emotion"] = emotion
+            except (TypeError, ValueError):
+                pass
+
+        result = backend.synthesize(text, **call_kwargs)
 
         # Save to file
         if output_dir:
@@ -104,5 +141,6 @@ class TextToSpeechTool(BaseTool):
                 "duration_seconds": result.duration_seconds,
                 "voice_id": result.voice_id,
                 "backend": backend_key,
+                "emotion": result.metadata.get("emotion", ""),
             },
         )

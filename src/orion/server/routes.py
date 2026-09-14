@@ -43,12 +43,37 @@ def _to_messages(chat_messages) -> list[Message]:
     return messages
 
 
+# Base prompt for plain conversation (no tools). See the conversational branch
+# in chat_completions for why the full tool-usage prompt is not sent there.
+CONVERSATIONAL_PROMPT = (
+    "You are Orion, a warm, capable personal AI assistant running locally on the "
+    "user's own computer. Be natural and friendly, and keep replies short."
+)
+CONVERSATIONAL_HISTORY = 6
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request_body: ChatCompletionRequest, request: Request):
     """Handle chat completion requests (streaming and non-streaming)."""
+    idle_scheduler = getattr(request.app.state, "idle_learning_scheduler", None)
+    if idle_scheduler is not None:
+        idle_scheduler.touch()
+
     engine = request.app.state.engine
     agent = getattr(request.app.state, "agent", None)
     model = request_body.model
+
+    # Captured before anything below (system prompt, session recap, memory
+    # context) mutates request_body.messages -- memory capture needs the
+    # user's actual raw question, not the context-injected/wrapped version
+    # that gets spliced into the last user message further down. Without
+    # this, each captured memory would embed the last one's full injected
+    # content, growing into a self-referential, ever-larger blob every turn.
+    raw_user_query = ""
+    for m in reversed(request_body.messages):
+        if m.role == "user" and m.content:
+            raw_user_query = m.content
+            break
 
     # Inject system prompt if missing
     config = getattr(request.app.state, "config", None)
@@ -58,6 +83,134 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
             from orion.server.models import ChatMessage
             sys_msg = ChatMessage(role="system", content=sys_prompt)
             request_body.messages.insert(0, sys_msg)
+
+    # Session Memory: if the user is resuming this thread after a long gap,
+    # nudge the model to briefly acknowledge it using the history already
+    # in this request — no extra LLM call needed. See session_recap.py.
+    from orion.server.session_recap import mark_activity, should_inject_recap
+
+    conversation_turns = [m for m in request_body.messages if m.role in ("user", "assistant")]
+    if should_inject_recap(len(conversation_turns)):
+        from orion.server.session_recap import RECAP_INSTRUCTION
+
+        if request_body.messages and request_body.messages[0].role == "system":
+            request_body.messages[0].content = (
+                f"{request_body.messages[0].content}\n\n{RECAP_INSTRUCTION}"
+            )
+        else:
+            from orion.server.models import ChatMessage
+            request_body.messages.insert(0, ChatMessage(role="system", content=RECAP_INSTRUCTION))
+    mark_activity()
+
+    # Talking to Orion in the app is proof the user is here: clear a manual
+    # "away" flag so it stops auto-replying to their contacts.
+    try:
+        from orion.core.activity import get_manual_away, set_manual_away
+
+        if get_manual_away():
+            set_manual_away(False)
+    except Exception:
+        logging.getLogger("orion.server").debug("Away flag check failed", exc_info=True)
+
+    # Real clock, the user's stored name, and greeting rules -- see
+    # server/live_context.py. Without it the model asked the user for the
+    # date, called the user "Orion", and said "Greetings!" on every reply.
+    try:
+        from orion.server.live_context import build_live_context
+
+        user_turns = sum(1 for m in request_body.messages if m.role == "user")
+        live_note = build_live_context(raw_user_query, first_turn=user_turns <= 1)
+        if request_body.messages and request_body.messages[0].role == "system":
+            request_body.messages[0].content += f"\n\n{live_note}"
+        else:
+            from orion.server.models import ChatMessage
+
+            request_body.messages.insert(0, ChatMessage(role="system", content=live_note))
+    except Exception:
+        logging.getLogger("orion.server").debug("Live context injection failed", exc_info=True)
+
+    # Real affect-derived tone guidance -- see core/affect.py. Every input
+    # here is a real signal (message urgency, actual recent trace outcomes,
+    # actual memory-graph similarity); the result is a behavioral
+    # instruction, never a first-person "I feel X" the model could parrot
+    # back as an assertion of real feeling.
+    try:
+        from orion.core.affect import compute_affect, tone_instruction
+
+        from starlette.concurrency import run_in_threadpool
+
+        affect_state = await run_in_threadpool(
+            compute_affect,
+            text=raw_user_query,
+            trace_store=getattr(request.app.state, "trace_store", None),
+            memory_backend=getattr(request.app.state, "memory_backend", None),
+        )
+        tone_note = tone_instruction(affect_state)
+        if tone_note:
+            if request_body.messages and request_body.messages[0].role == "system":
+                request_body.messages[0].content += f"\n\n{tone_note}"
+            else:
+                from orion.server.models import ChatMessage
+                request_body.messages.insert(0, ChatMessage(role="system", content=tone_note))
+    except Exception:
+        logging.getLogger("orion.server").debug("Affect tone injection failed", exc_info=True)
+
+    # Pending-action approval: parse ONLY the human's own latest message text
+    # for explicit approve/deny tokens (e.g. "abc123 yes"). This is the sole
+    # path by which a queued action (e.g. a drafted outgoing message) can be
+    # approved — the model is never given record_decision as a callable tool,
+    # specifically so it cannot approve its own proposed actions the way it
+    # self-approved a shutdown earlier by just setting confirm=true itself.
+    last_user_text = ""
+    for m in reversed(request_body.messages):
+        if m.role == "user" and m.content:
+            last_user_text = m.content
+            break
+    approval_executed = False
+    if last_user_text:
+        from orion.tools.proactive_tools import parse_approval_response
+
+        decisions = parse_approval_response(last_user_text)
+        if decisions:
+            summary = "; ".join(
+                f"{d['id']} {'approved' if d['approved'] else 'denied'}" for d in decisions
+            )
+            approved_ids = [d["id"] for d in decisions if d["approved"]]
+            if approved_ids:
+                # Run the approved actions here, not by asking the model to
+                # call execute_pending_actions: a small model answered "send
+                # it" with a paragraph about the draft and never sent anything.
+                # The model only reports the real outcome.
+                from orion.tools.proactive_tools import ExecutePendingActionsTool
+
+                try:
+                    from starlette.concurrency import run_in_threadpool
+
+                    result = await run_in_threadpool(
+                        ExecutePendingActionsTool().execute, action_ids=approved_ids
+                    )
+                    outcome = result.content
+                except Exception as exc:
+                    outcome = f"Execution failed: {exc}"
+                note = (
+                    f"[APPROVAL RECORDED AND EXECUTED: {summary}]\nReal result: {outcome}\n"
+                    "Tell the user in one or two short sentences exactly what happened, based "
+                    "only on that result. If it failed, say so plainly and give the reason; "
+                    "never claim success the result does not show. Do not queue or execute "
+                    "anything again."
+                )
+                approval_executed = True
+            else:
+                note = (
+                    f"[APPROVAL RECORDED: {summary}] The user declined. Confirm in one short "
+                    "sentence that it was cancelled. Do not queue it again."
+                )
+                approval_executed = True
+            if request_body.messages and request_body.messages[0].role == "system":
+                request_body.messages[0].content += f"\n\n{note}"
+            else:
+                from orion.server.models import ChatMessage
+                request_body.messages.insert(0, ChatMessage(role="system", content=note))
 
     # Memory Condensation: enforce history limit to reduce tokens and encourage Obsidian usage
     if config is not None and getattr(config.agent, "max_history_messages", 0) > 0:
@@ -71,10 +224,52 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                 truncated.insert(0, sys_msg)
             request_body.messages = truncated
 
-    # Inject memory context into messages before dispatching
+    # Plain conversation ("can you hear me?") gets no tools and no recalled
+    # memories. Recall on small talk only ever surfaced earlier small-talk
+    # replies, which the model then parroted (a stray "Wi-Fi at 94%" answer
+    # was echoed into every later greeting).
+    from orion.tools.tool_router import is_conversational, wants_live_data
+
+    # An approval that was just executed only needs its result reported.
+    conversational = not request_body.tools and (
+        approval_executed or is_conversational(raw_user_query)
+    )
+    if (
+        conversational
+        and not approval_executed
+        and request_body.messages
+        and request_body.messages[0].role == "system"
+    ):
+        # No tools are offered on this path, so the long tool-usage system
+        # prompt is dead weight: on a 4B model half on CPU, every 2k prompt
+        # tokens cost ~6.5 s before the first word. Keep the notes appended
+        # after it (live context, tone, recap), swap the base for a short
+        # persona, and keep only recent turns.
+        system = request_body.messages[0]
+        base_prompt = ""
+        if config is not None:
+            base_prompt = getattr(config.agent, "system_prompt", "") or getattr(
+                config.agent, "default_system_prompt", ""
+            )
+        notes = system.content
+        if base_prompt and notes.startswith(base_prompt):
+            notes = notes[len(base_prompt):]
+        system.content = (
+            f"{CONVERSATIONAL_PROMPT}\n\n{notes.strip()}\n\nThis is casual conversation: "
+            "answer the user's actual words directly in one or two short, natural spoken "
+            "sentences. No markdown, no lists, and do not mention system status unless asked."
+        )
+        turns = [m for m in request_body.messages[1:] if m.role in ("user", "assistant")]
+        request_body.messages = [system, *turns[-CONVERSATIONAL_HISTORY:]]
+
+    # Inject memory context into messages before dispatching. Not for live
+    # facts (weather, time, battery...): a remembered answer is stale, and the
+    # model repeated it instead of calling the tool.
     memory_backend = getattr(request.app.state, "memory_backend", None)
     if (
-        config is not None
+        not conversational
+        and not wants_live_data(raw_user_query)
+        and config is not None
         and memory_backend is not None
         and config.agent.context_from_memory
         and request_body.messages
@@ -96,7 +291,10 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                     min_score=config.memory.context_min_score,
                     max_context_tokens=config.memory.context_max_tokens,
                 )
-                enriched = inject_context(
+                from starlette.concurrency import run_in_threadpool
+
+                enriched = await run_in_threadpool(
+                    inject_context,
                     query_text,
                     messages,
                     memory_backend,
@@ -157,6 +355,9 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                 exc_info=True,
             )
 
+    trace_store = getattr(request.app.state, "trace_store", None)
+    agent_name = getattr(request.app.state, "agent_name", "") or ""
+
     if request_body.stream:
         bus = getattr(request.app.state, "bus", None)
         # Use the agent stream bridge only when tools are present (the
@@ -164,9 +365,31 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         # so it can't stream tokens in real-time).  For plain chat, stream
         # directly from the engine for true token-by-token output.
         has_agent_tools = agent is not None and getattr(agent, "accepts_tools", False)
+        # Plain conversation skips the tool agent entirely: streaming from
+        # the engine gives a first token in about a second instead of a
+        # tool-selection round trip plus word-split replay.
+        if has_agent_tools and conversational:
+            has_agent_tools = False
         if agent is not None and bus is not None and (request_body.tools or has_agent_tools):
-            return await _handle_agent_stream(agent, bus, model, request_body)
-        return await _handle_stream(engine, model, request_body, complexity_info)
+            return await _handle_agent_stream(
+                agent,
+                bus,
+                model,
+                request_body,
+                memory_backend=memory_backend,
+                raw_user_query=raw_user_query,
+                trace_store=trace_store,
+                agent_name=agent_name,
+            )
+        return await _handle_stream(
+            engine,
+            model,
+            request_body,
+            complexity_info,
+            memory_backend=memory_backend,
+            raw_user_query=raw_user_query,
+            trace_store=trace_store,
+        )
 
     # Non-streaming: use agent if available, otherwise direct engine call
     if agent is not None:
@@ -312,11 +535,29 @@ def _handle_agent(
     )
 
 
-async def _handle_agent_stream(agent, bus, model, req):
+async def _handle_agent_stream(
+    agent,
+    bus,
+    model,
+    req,
+    memory_backend=None,
+    raw_user_query="",
+    trace_store=None,
+    agent_name="",
+):
     """Stream agent response with EventBus events via SSE."""
     from orion.server.stream_bridge import create_agent_stream
 
-    return await create_agent_stream(agent, bus, model, req)
+    return await create_agent_stream(
+        agent,
+        bus,
+        model,
+        req,
+        memory_backend=memory_backend,
+        raw_user_query=raw_user_query,
+        trace_store=trace_store,
+        agent_name=agent_name,
+    )
 
 
 async def _handle_stream(
@@ -324,8 +565,13 @@ async def _handle_stream(
     model: str,
     req: ChatCompletionRequest,
     complexity_info=None,
+    memory_backend=None,
+    raw_user_query: str = "",
+    trace_store=None,
 ):
     """Stream response using SSE format."""
+    import time as _time
+
     from orion.server.cloud_router import (
         is_cloud_model,
         stream_cloud,
@@ -334,6 +580,15 @@ async def _handle_stream(
 
     messages = _to_messages(req.messages)
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    turn_started_at = _time.time()
+
+    # For memory capture once the stream completes. raw_user_query is the
+    # user's actual question, captured before memory-context injection
+    # rewrote the last user message -- capturing that enriched version
+    # instead would make each memory embed the last one's full injected
+    # content, snowballing into an ever-larger self-referential blob.
+    last_user_text = raw_user_query
+    reply_parts: list[str] = []
 
     # Route directly to the right backend — bypasses engine routing entirely
     # so broken MultiEngine state can never misdirect requests.
@@ -392,6 +647,7 @@ async def _handle_stream(
                         max_tokens=req.max_tokens,
                     )
             async for token in token_iter:
+                reply_parts.append(token)
                 chunk = ChatCompletionChunk(
                     id=chunk_id,
                     model=model,
@@ -462,6 +718,53 @@ async def _handle_stream(
         yield f"data: {_json.dumps(finish_dict)}\n\n"
         yield "data: [DONE]\n\n"
 
+        # Fire-and-forget: turn this exchange into a durable, connected
+        # memory (see memory_capture.py) and a real trace for the
+        # auto-learning pipeline (see trace_capture.py). Both run after the
+        # response has already been fully sent, on background threads, so
+        # neither can add latency to or fail the actual reply the user is
+        # waiting on.
+        if last_user_text and reply_parts:
+            import threading
+
+            full_reply = "".join(reply_parts)
+
+            if memory_backend is not None:
+                from orion.learning.memory_capture import capture_turn
+
+                threading.Thread(
+                    target=capture_turn,
+                    kwargs={
+                        "user_text": last_user_text,
+                        "assistant_text": full_reply,
+                        "memory_backend": memory_backend,
+                        "channel": "chat",
+                    },
+                    daemon=True,
+                ).start()
+
+            if trace_store is not None:
+                from orion.learning.trace_capture import record_chat_trace
+
+                threading.Thread(
+                    target=record_chat_trace,
+                    kwargs={
+                        "trace_store": trace_store,
+                        "query": last_user_text,
+                        "result_content": full_reply,
+                        "model": model,
+                        "engine": "cloud" if use_cloud else "ollama",
+                        "started_at": turn_started_at,
+                        # No real token accounting on this path (the direct
+                        # engine stream doesn't report usage) -- the same
+                        # ~4-chars-per-token estimate already used as a
+                        # fallback elsewhere (stream_bridge.py), not a made
+                        # up number.
+                        "total_tokens": max(len(full_reply) // 4, 1),
+                    },
+                    daemon=True,
+                ).start()
+
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
@@ -511,7 +814,7 @@ async def pull_model(request: Request):
 
     import httpx as _httpx
 
-    host = getattr(engine, "_host", "http://localhost:11434")
+    host = getattr(engine, "_host", "http://127.0.0.1:11434")
     client = _httpx.Client(base_url=host, timeout=600.0)
     try:
         resp = client.post(
@@ -542,7 +845,7 @@ async def delete_model(model_name: str, request: Request):
 
     import httpx as _httpx
 
-    host = getattr(engine, "_host", "http://localhost:11434")
+    host = getattr(engine, "_host", "http://127.0.0.1:11434")
     client = _httpx.Client(base_url=host, timeout=30.0)
     try:
         resp = client.request(
@@ -711,6 +1014,15 @@ async def server_info(request: Request):
     }
 
 
+@router.get("/v1/learning/status")
+async def learning_status(request: Request):
+    """Status of the idle-triggered background learning scheduler, if enabled."""
+    scheduler = getattr(request.app.state, "idle_learning_scheduler", None)
+    if scheduler is None:
+        return {"enabled": False}
+    return {"enabled": True, **scheduler.status}
+
+
 @router.get("/health")
 async def health(request: Request):
     """Health check endpoint."""
@@ -769,6 +1081,52 @@ async def channel_status(request: Request):
     return {"status": bridge.status().value}
 
 
+def _whatsapp_channel(request: Request):
+    """Reach into the real WhatsAppBaileysChannel behind the ChannelBridge
+    wrapper -- app.state.channel_bridge is a multiplexer over one channel
+    per configured type (see server/channel_bridge.py's `_channels` dict),
+    not the WhatsApp channel object itself.
+    """
+    bridge = getattr(request.app.state, "channel_bridge", None)
+    if bridge is None:
+        return None
+    channels = getattr(bridge, "_channels", {}) or {}
+    return channels.get("whatsapp_baileys")
+
+
+@router.get("/v1/channels/whatsapp/qr")
+async def whatsapp_qr(request: Request) -> dict:
+    """Current WhatsApp pairing state: connection status, and the raw QR
+    pairing string (if the bridge is mid-handshake and hasn't linked yet)
+    for the frontend to render into a scannable code. Real state only --
+    no QR value once actually connected, none at all if the bridge was
+    never started.
+    """
+    ch = _whatsapp_channel(request)
+    if ch is None:
+        return {"status": "not_configured", "qr": None}
+    return {"status": ch.status().value, "qr": getattr(ch, "qr_code", "") or None}
+
+
+@router.post("/v1/channels/whatsapp/connect")
+async def whatsapp_connect(request: Request) -> dict:
+    """(Re)start the WhatsApp bridge so it begins the pairing handshake --
+    poll /v1/channels/whatsapp/qr afterward for the code to scan. Safe to
+    call when already connected/connecting: connect() is a no-op in that
+    case (see WhatsAppBaileysChannel.connect).
+    """
+    ch = _whatsapp_channel(request)
+    if ch is None:
+        raise HTTPException(
+            status_code=400,
+            detail="WhatsApp channel is not configured. Enable it in config.toml first.",
+        )
+    import asyncio
+
+    await asyncio.to_thread(ch.connect)
+    return {"status": ch.status().value}
+
+
 # ---------------------------------------------------------------------------
 # Security scan endpoint
 # ---------------------------------------------------------------------------
@@ -794,6 +1152,76 @@ async def security_scan():
             for r in results
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Clipboard Intelligence — quick one-shot transforms for the floating panel
+# ---------------------------------------------------------------------------
+
+_CLIPBOARD_ACTION_PROMPTS: dict[str, str] = {
+    "translate": (
+        "Translate the following text to {target_language}. "
+        "Output ONLY the translation, nothing else."
+    ),
+    "summarize": (
+        "Summarize the following text in 2-3 concise sentences. "
+        "Output ONLY the summary, nothing else."
+    ),
+    "explain": (
+        "Explain the following text in plain, simple language a beginner "
+        "could understand. Output ONLY the explanation, nothing else."
+    ),
+    "fix": (
+        "Fix any spelling, grammar, and phrasing issues in the following text. "
+        "Preserve the original meaning and tone. Output ONLY the corrected text, "
+        "nothing else."
+    ),
+}
+
+
+@router.post("/v1/clipboard/action")
+async def clipboard_action(request: Request):
+    """Run a quick transform (translate/summarize/explain/fix) on clipboard text.
+
+    Deliberately bypasses the main chat_completions pipeline (no memory
+    injection, no conversation history, no tool-calling loop) since this is
+    a fast, stateless, single-shot transform for the floating clipboard panel.
+    """
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    action = (body.get("action") or "").strip().lower()
+    target_language = (body.get("target_language") or "English").strip()
+
+    if not text:
+        raise HTTPException(status_code=400, detail="'text' is required")
+    if action not in _CLIPBOARD_ACTION_PROMPTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'action' must be one of: {', '.join(_CLIPBOARD_ACTION_PROMPTS)}",
+        )
+
+    engine = getattr(request.app.state, "engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="No inference engine configured")
+
+    model = getattr(request.app.state, "model", None) or "llama3.2:3b"
+    system_prompt = _CLIPBOARD_ACTION_PROMPTS[action].format(target_language=target_language)
+
+    messages = [
+        Message(role=Role.SYSTEM, content=system_prompt),
+        Message(role=Role.USER, content=text[:8000]),
+    ]
+
+    try:
+        import asyncio
+
+        result = await asyncio.to_thread(
+            engine.generate, messages, model=model, temperature=0.3, max_tokens=800
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Clipboard action failed: {exc}") from exc
+
+    return {"action": action, "result": (result.get("content") or "").strip()}
 
 
 __all__ = ["router"]

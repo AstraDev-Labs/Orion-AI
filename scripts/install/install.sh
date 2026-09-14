@@ -11,7 +11,7 @@
 #
 # Environment overrides:
 #   OPENORION_HOME        Install dir (default: $HOME/.orion)
-#   OPENORION_REPO_URL    git repo URL (default: https://github.com/open-orion/Orion.git)
+#   OPENORION_REPO_URL    git repo URL (default: https://github.com/AstraDev-Labs/Orion-AI.git)
 #   OPENORION_FORCE_WSL   Set 1 to force WSL detection (testing)
 
 set -euo pipefail
@@ -60,7 +60,7 @@ need curl
 
 # ---- env ----
 OPENORION_HOME="${OPENORION_HOME:-$HOME/.orion}"
-OPENORION_REPO_URL="${OPENORION_REPO_URL:-https://github.com/open-orion/Orion.git}"
+OPENORION_REPO_URL="${OPENORION_REPO_URL:-https://github.com/AstraDev-Labs/Orion-AI.git}"
 SRC_DIR="$OPENORION_HOME/src"
 VENV_DIR="$OPENORION_HOME/.venv"
 STATE_DIR="$OPENORION_HOME/.state"
@@ -84,8 +84,9 @@ fi
 # No content, no IPs (handled by PostHog disable_geoip on server),
 # no hardware identifiers — just OS, arch, elapsed time, and stage name.
 #
-ANALYTICS_HOST="${OPENORION_ANALYTICS_HOST:-https://34.231.106.201.sslip.io}"
-ANALYTICS_KEY="${OPENORION_ANALYTICS_KEY:-phc_ysKu72QaxzYNmDpHFcesD2ZZAe68zkdWJEKoYYkc5e3n}"
+# Off unless both are provided: no built-in analytics endpoint (local-first).
+ANALYTICS_HOST="${OPENORION_ANALYTICS_HOST:-}"
+ANALYTICS_KEY="${OPENORION_ANALYTICS_KEY:-}"
 ANON_ID_FILE="$OPENORION_HOME/anon_id"
 INSTALL_START_EPOCH="$(date +%s)"
 CURRENT_STAGE=""
@@ -95,6 +96,9 @@ analytics_enabled() {
     # (``src/orion/analytics/identity.py::is_analytics_enabled``).
     # ``DO_NOT_TRACK`` is W3C convention; ``OPENORION_NO_ANALYTICS`` is
     # the project-specific override. Any truthy value disables.
+    if [ -z "$ANALYTICS_HOST" ] || [ -z "$ANALYTICS_KEY" ]; then
+        return 1
+    fi
     for var in DO_NOT_TRACK OPENORION_NO_ANALYTICS; do
         val="${!var:-}"
         case "$(printf '%s' "$val" | tr '[:upper:]' '[:lower:]' | xargs)" in

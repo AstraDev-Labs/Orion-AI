@@ -341,12 +341,20 @@ class SystemBuilder:
 
     def _resolve_memory(self, config):
         try:
+            import inspect
+
             import orion.tools.storage  # noqa: F401 -- trigger registration
             from orion.core.registry import MemoryRegistry
 
             key = config.memory.default_backend
             if MemoryRegistry.contains(key):
-                return MemoryRegistry.create(key, db_path=config.memory.db_path)
+                cls = MemoryRegistry.get(key)
+                sig = inspect.signature(cls.__init__)
+                accepts_db_path = "db_path" in sig.parameters or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+                )
+                kwargs = {"db_path": config.memory.db_path} if accepts_db_path else {}
+                return MemoryRegistry.create(key, **kwargs)
         except Exception as exc:
             logger.warning("Failed to resolve memory backend: %s", exc)
         return None
@@ -391,11 +399,16 @@ class SystemBuilder:
             else:
                 tool_names = []
 
+        all_tools = {t.spec.name: t for t in internal_server.get_tools()}
         if tool_names:
-            all_tools = {t.spec.name: t for t in internal_server.get_tools()}
             tools = [all_tools[n] for n in tool_names if n in all_tools]
         else:
-            tools = []
+            # No explicit [tools] enabled / [agent] tools list configured —
+            # default to every registered tool rather than none. An agent
+            # with zero tools defeats the point of the tool-calling harness,
+            # and a fresh install (no config.toml edits) should get a fully
+            # capable assistant, not a crippled one.
+            tools = list(all_tools.values())
 
         if config.tools.mcp.servers:
             try:
@@ -557,12 +570,47 @@ class SystemBuilder:
                 lora_alpha=sft_cfg.lora_alpha,
             )
 
+            # Without a real eval_fn, LearningOrchestrator.run() has no
+            # baseline/post score to compare and unconditionally marks
+            # every cycle "accepted" -- not a real safety check. Build one
+            # from a fast, deterministic benchmark; fall back to the old
+            # (rubber-stamp) behavior only if the eval harness itself can't
+            # be constructed, rather than blocking learning entirely.
+            eval_fn = None
+            try:
+                from orion.learning.eval_gate import build_eval_fn
+
+                eval_fn = build_eval_fn(
+                    model=config.intelligence.default_model,
+                    engine_key=config.engine.default,
+                )
+            except Exception:
+                logger.warning("Eval gate unavailable for learning orchestrator", exc_info=True)
+
+            # LoRATrainer defaults to Qwen/Qwen3-0.6B if given no
+            # model_name -- a real HF model, but not necessarily the one
+            # actually being served. Resolve the *actual* served model's HF
+            # base repo from the catalog so a training run fine-tunes the
+            # model this system genuinely talks through, not an unrelated
+            # one. None (rather than a guess) if it isn't in the catalog --
+            # LoRATrainer's own default is the honest fallback in that case.
+            model_name = None
+            try:
+                from orion.intelligence.model_catalog import resolve_hf_repo
+
+                model_name = resolve_hf_repo(config.intelligence.default_model)
+            except Exception:
+                logger.debug("HF repo resolution failed for learning orchestrator", exc_info=True)
+
             return LearningOrchestrator(
                 trace_store=trace_store,
                 config_dir=config_dir,
+                eval_fn=eval_fn,
                 min_improvement=config.learning.min_improvement,
                 min_sft_pairs=sft_cfg.min_pairs,
                 lora_config=lora_config,
+                model_name=model_name,
+                enable_domain_research=True,
             )
         except Exception as exc:
             logger.warning("Failed to set up learning orchestrator: %s", exc)

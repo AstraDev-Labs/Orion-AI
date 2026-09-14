@@ -15,7 +15,7 @@ Create the user and installation directory:
 ```bash
 sudo useradd --system --create-home --home-dir /opt/orion orion
 sudo -u orion python3 -m venv /opt/orion/.venv
-sudo -u orion git clone https://github.com/open-orion/Orion.git /opt/orion/Orion
+sudo -u orion git clone https://github.com/AstraDev-Labs/Orion-AI.git /opt/orion/Orion
 cd /opt/orion/Orion && sudo -u orion uv sync --extra server
 ```
 

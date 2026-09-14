@@ -61,7 +61,7 @@ Local-first remains the default when no key is in env. Precedence is OpenRouter 
 | Variable | Default | Purpose |
 |---|---|---|
 | `OPENORION_HOME` | `$HOME/.orion` | Install location. |
-| `OPENORION_REPO_URL` | `https://github.com/open-orion/Orion.git` | Source repo for the clone step. |
+| `OPENORION_REPO_URL` | `https://github.com/AstraDev-Labs/Orion-AI.git` | Source repo for the clone step. |
 
 ## Uninstall
 

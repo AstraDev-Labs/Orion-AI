@@ -9,7 +9,14 @@
   <link rel="icon" href="/favicon.ico" />
   <title>Orion</title>
 </head>
-<body>
+<body style="margin:0;background:#100e0b">
+  <!-- Shown instantly, before the JavaScript bundle loads; React's loading
+       screen removes it. Inline so it needs nothing else to render. -->
+  <div id="boot-splash" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(900px 700px at 50% 45%,#1c1811 0%,#100e0b 70%);color:#f8f4f4;font-family:Georgia,serif;z-index:1">
+    <img src="/orion-logo.png" alt="" width="132" height="132" style="border-radius:28px;margin-bottom:22px;animation:bootpulse 2.6s ease-in-out infinite" />
+    <div style="font-size:34px;letter-spacing:.42em;padding-left:.42em">ORION</div>
+    <style>@keyframes bootpulse{0%,100%{opacity:.8}50%{opacity:1}}</style>
+  </div>
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
 </body>

@@ -7,7 +7,7 @@ A persistent operative agent that runs on a cron schedule, maintains state acros
 ### 1. Install and initialize
 
 ```bash
-git clone https://github.com/open-orion/Orion.git
+git clone https://github.com/AstraDev-Labs/Orion-AI.git
 cd Orion
 uv sync --extra dev
 orion init --preset scheduled-monitor

@@ -129,8 +129,10 @@ def _warn_capture_quality(rms: float, peak: float, duration: float) -> None:
         )
 
 
-def _speak_audio_stream(tts, text: str, *, voice_id: str = "af_heart") -> bool:
-    """Play Kokoro audio chunks as they are synthesized (no WAV file)."""
+def _speak_audio_stream(tts, text: str, *, voice_id: str = "") -> bool:
+    """Play TTS audio as it's synthesized. Streams for backends that support it
+    (e.g. Kokoro); buffers and plays whole for cloud backends (ElevenLabs,
+    Cartesia, OpenAI) that only offer a single synthesize() call."""
     if not text.strip():
         return False
 
@@ -142,6 +144,10 @@ def _speak_audio_stream(tts, text: str, *, voice_id: str = "af_heart") -> bool:
 
     if not clean_text:
         return False
+
+    if not hasattr(tts, "iter_synthesize"):
+        result = tts.synthesize(clean_text, voice_id=voice_id)
+        return _speak_audio(result)
 
     try:
         import numpy as np
@@ -159,7 +165,7 @@ def _speak_audio_stream(tts, text: str, *, voice_id: str = "af_heart") -> bool:
     chunks_played = 0
     stream.start()
     try:
-        for audio in tts.iter_synthesize(clean_text, voice_id=voice_id):
+        for audio in tts.iter_synthesize(clean_text, voice_id=voice_id or "af_heart"):
             samples = np.asarray(audio, dtype=np.float32).reshape(-1)
             if samples.size == 0:
                 continue
@@ -458,6 +464,20 @@ def _prepare_audio_for_stt(np, audio_np):
     default=False,
     help="Skip 12-model ensemble STT verification (lower latency, less accurate).",
 )
+@click.option(
+    "--tts-backend",
+    type=click.Choice(["auto", "kokoro", "cartesia", "openai_tts", "elevenlabs"]),
+    default="auto",
+    show_default=True,
+    help="Voice engine. 'auto' prefers the most natural cloud voice with an API "
+    "key set (ElevenLabs, then Cartesia), falling back to local Kokoro.",
+)
+@click.option(
+    "--voice-id",
+    type=str,
+    default="",
+    help="Voice ID for the selected TTS backend. Defaults to the backend's own natural voice.",
+)
 def voice(
     model_name: str,
     agent_name: str,
@@ -471,6 +491,8 @@ def voice(
     list_input_devices: bool,
     debug_audio_dir: Path | None,
     no_verify: bool,
+    tts_backend: str,
+    voice_id: str,
 ) -> None:
     """Start a real-time voice conversation with J.A.R.V.I.S."""
     try:
@@ -498,10 +520,32 @@ def voice(
     stt._ensure_model()
 
     # 2. Initialize Text-to-Speech
-    from orion.speech.kokoro_tts import KokoroTTSBackend
-    console.print("[dim]Loading Kokoro engine...[/dim]")
-    tts = KokoroTTSBackend()
-    tts._ensure_pipeline()
+    import os
+
+    import orion.speech  # noqa: F401  — registers all TTS backends
+    from orion.core.registry import TTSRegistry
+
+    resolved_backend = tts_backend
+    if resolved_backend == "auto":
+        if os.environ.get("ELEVENLABS_API_KEY"):
+            resolved_backend = "elevenlabs"
+        elif os.environ.get("CARTESIA_API_KEY"):
+            resolved_backend = "cartesia"
+        else:
+            resolved_backend = "kokoro"
+
+    console.print(f"[dim]Loading {resolved_backend} voice engine...[/dim]")
+    tts = TTSRegistry.get(resolved_backend)()
+    if resolved_backend == "kokoro":
+        tts._ensure_pipeline()
+    elif not tts.health():
+        console.print(
+            f"[yellow]{resolved_backend} is not configured (missing API key) — "
+            f"falling back to local Kokoro voice.[/yellow]"
+        )
+        resolved_backend = "kokoro"
+        tts = TTSRegistry.get("kokoro")()
+        tts._ensure_pipeline()
 
     # 3. Initialize Agent
     console.print("[dim]Waking up the Orchestrator...[/dim]")
@@ -669,7 +713,7 @@ def voice(
                     console.print(
                         f"\n[bold blue]J.A.R.V.I.S.:[/bold blue] {unclear_reply}"
                     )
-                    _speak_audio_stream(tts, unclear_reply)
+                    _speak_audio_stream(tts, unclear_reply, voice_id=voice_id)
                     continue
 
                 if vr.status == "CORRECTED":
@@ -732,8 +776,8 @@ def voice(
 
             # TTS — stream chunks to speakers as they are generated
             console.print("[dim]Speaking...[/dim]")
-            if not _speak_audio_stream(tts, response):
+            if not _speak_audio_stream(tts, response, voice_id=voice_id):
                 console.print(
-                    "[red]TTS playback failed. Check the Kokoro voice/model setup.[/red]"
+                    f"[red]TTS playback failed. Check the {resolved_backend} voice setup.[/red]"
                 )
                 continue
