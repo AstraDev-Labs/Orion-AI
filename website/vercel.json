@@ -4,6 +4,9 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "trailingSlash": false,
+  "functions": {
+    "api/contact.js": { "maxDuration": 15 }
+  },
   "headers": [
     {
       "source": "/(.*)",

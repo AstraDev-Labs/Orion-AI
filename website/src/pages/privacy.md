@@ -39,7 +39,8 @@ Orion is local-first. It has no accounts, sends no usage analytics, and processe
 - The site has **no cookies, no analytics and no trackers**.
 - The download and release details are loaded by your browser straight from **GitHub's public API** (api.github.com), and the installer downloads from GitHub. GitHub receives those requests under [its own privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 - The PC compatibility check runs **only in your browser**. Nothing it reads is sent anywhere.
-- The site is hosted on GitHub Pages, which may keep standard server logs.
+- **The contact form** sends your name, email address, topic and message to Orion's inbox (orionai.offl@gmail.com, a Google Gmail account). They're used only to reply to you, and aren't added to any mailing list or shared. Your IP address is used briefly to limit how many messages can be sent, and isn't stored with your message. You can ask for your messages to be deleted by emailing the same address.
+- The site is hosted on Vercel, which keeps standard server logs (such as IP addresses) under [its privacy policy](https://vercel.com/legal/privacy-policy).
 
 ## Changes and contact
 
