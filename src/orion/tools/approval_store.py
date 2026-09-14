@@ -281,6 +281,37 @@ class ApprovalStore:
             )
         self._conn.commit()
 
+    def decide_pending(self, action_id: str, status: str) -> bool:
+        """Approve or deny an action only if it is still pending and unexpired.
+
+        The check and the update are one statement, so a repeated or
+        concurrent approval cannot revive an action that was already
+        decided, executed or expired. Returns True if this call decided it.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        cur = self._conn.execute(
+            "UPDATE pending_actions SET status = ?, decision_at = ? "
+            "WHERE id = ? AND status = ? AND expires_at > ?",
+            (status, now, action_id, STATUS_PENDING, now),
+        )
+        self._conn.commit()
+        return cur.rowcount == 1
+
+    def claim_approved(self, action_id: str) -> bool:
+        """Mark an approved action as executed before running it.
+
+        Returns True only for the one caller that made the change, so the
+        same approved action is never run twice.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        cur = self._conn.execute(
+            "UPDATE pending_actions SET status = ?, decision_at = ? "
+            "WHERE id = ? AND status = ?",
+            (STATUS_EXECUTED, now, action_id, STATUS_APPROVED),
+        )
+        self._conn.commit()
+        return cur.rowcount == 1
+
     def expire_stale(self) -> int:
         """Mark past-TTL pending actions as expired. Returns count."""
         now = datetime.now(timezone.utc).isoformat()

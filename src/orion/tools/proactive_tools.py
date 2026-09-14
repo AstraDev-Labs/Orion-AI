@@ -36,7 +36,6 @@ from orion.tools.approval_store import (
     DECISION_ALWAYS_DENY,
     STATUS_APPROVED,
     STATUS_DENIED,
-    STATUS_EXECUTED,
     TIER_HIGH,
     TIER_LOW,
     TIER_MEDIUM,
@@ -320,7 +319,15 @@ class RecordDecisionTool(BaseTool):
             )
 
         new_status = STATUS_APPROVED if approved else STATUS_DENIED
-        store.update_status(action_id, new_status)
+        if not store.decide_pending(action_id, new_status):
+            return ToolResult(
+                tool_name=self.spec.name,
+                success=False,
+                content=(
+                    f"Action {action_id} is no longer waiting for a decision "
+                    f"(it is {action.status}); nothing was changed."
+                ),
+            )
 
         if remember:
             decision = DECISION_ALWAYS_APPROVE if approved else DECISION_ALWAYS_DENY
@@ -399,8 +406,11 @@ class ExecutePendingActionsTool(BaseTool):
 
         results: List[Dict[str, Any]] = []
         for action in actions:
+            # Claim the action before running it, so a duplicate or concurrent
+            # request can never run the same message, email or install twice.
+            if not store.claim_approved(action.id):
+                continue
             success, message = self._run_action(action)
-            store.update_status(action.id, STATUS_EXECUTED)
             results.append(
                 {
                     "id": action.id,
@@ -854,7 +864,8 @@ def parse_approval_response(
             pending = s.list_pending()
             for action in pending:
                 new_status = STATUS_APPROVED if approved else STATUS_DENIED
-                s.update_status(action.id, new_status)
+                if not s.decide_pending(action.id, new_status):
+                    continue
                 if always and action.tier in (TIER_LOW, TIER_MEDIUM):
                     decision = (
                         DECISION_ALWAYS_APPROVE if approved else DECISION_ALWAYS_DENY
@@ -868,7 +879,10 @@ def parse_approval_response(
             if action is None:
                 continue
             new_status = STATUS_APPROVED if approved else STATUS_DENIED
-            s.update_status(target, new_status)
+            # Only a still-pending, unexpired action can be decided: repeating
+            # "abc123 yes" after it ran must not approve (and run) it again.
+            if not s.decide_pending(target, new_status):
+                continue
             remember = always and action.tier in (TIER_LOW, TIER_MEDIUM)
             if remember:
                 decision = DECISION_ALWAYS_APPROVE if approved else DECISION_ALWAYS_DENY
@@ -888,13 +902,13 @@ def parse_approval_response(
             action = pending[-1]
             approved = bool(_BARE_APPROVE_RE.match(text.strip()))
             new_status = STATUS_APPROVED if approved else STATUS_DENIED
-            s.update_status(action.id, new_status)
-            processed.append(
-                {"id": action.id, "approved": approved, "remembered": False}
-            )
-            for older in pending[:-1]:
-                if older.action_type == action.action_type:
-                    s.update_status(older.id, STATUS_DENIED)
+            if s.decide_pending(action.id, new_status):
+                processed.append(
+                    {"id": action.id, "approved": approved, "remembered": False}
+                )
+                for older in pending[:-1]:
+                    if older.action_type == action.action_type:
+                        s.decide_pending(older.id, STATUS_DENIED)
 
     return processed
 
