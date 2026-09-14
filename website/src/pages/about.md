@@ -19,7 +19,9 @@ Most "personal" AI assistants send every request to someone else's servers: your
 
 ## Who builds it
 
-Orion is designed and built by **Tharun**, as an independent open-source project. Every part of it, from the desktop app and voice to the installer and this website, is developed in the open on [GitHub](https://github.com/AstraDev-Labs/Orion-AI).
+Orion is designed and built by **Tharun**, its developer and product owner, as an independent open-source project. Every part of it, from the desktop app and voice to the installer and this website, is developed in the open on [GitHub](https://github.com/AstraDev-Labs/Orion-AI).
+
+The **Marketing & Security Audit team** (Sanjay A., Yogaraj S. and Raghavan P.) helps people discover Orion and reviews how it handles security and privacy. [Meet the team](/team).
 
 ## Where it's at
 

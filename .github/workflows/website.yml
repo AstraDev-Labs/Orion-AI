@@ -40,3 +40,7 @@ jobs:
 
       - name: Build site
         run: npm run build
+        env:
+          # This build is only a check and is never deployed; Vercel supplies
+          # the real address for deployments.
+          SITE_URL: https://example.org
