@@ -17,6 +17,26 @@ DISCOVERY_ORDER = [
 ]
 
 
+# Whisper sizes that have an English-only variant ("base" -> "base.en").
+_ENGLISH_VARIANTS = frozenset({"tiny", "base", "small", "medium"})
+
+
+def whisper_model_for(model: str, language: str) -> str:
+    """The Whisper model to load: the English-only variant when speech is English.
+
+    Measured through a real laptop microphone on ten spoken commands, with
+    language locked to English either way: multilingual "base" got 41.7% of
+    words wrong ("Open Notepad" -> "Open no path", "Play Shape of You on
+    YouTube" -> "You can play a shape if you want to use it"); "base.en"
+    got 11.7% at the same speed.
+    """
+    name = (model or "base").strip()
+    lang = (language or "").strip().lower()
+    if lang in ("en", "english") and name in _ENGLISH_VARIANTS:
+        return f"{name}.en"
+    return name
+
+
 def _create_backend(
     key: str,
     config: "OrionConfig",
@@ -38,7 +58,7 @@ def _create_backend(
             if device == "cpu" and compute_type in ("float16", "float32"):
                 compute_type = "int8"
             return backend_cls(
-                model_size=config.speech.model,
+                model_size=whisper_model_for(config.speech.model, config.speech.language),
                 device=device,
                 compute_type=compute_type,
             )

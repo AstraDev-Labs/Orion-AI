@@ -1,9 +1,9 @@
 site_name: Orion
-site_url: https://open-orion.github.io/Orion/
+site_url: https://github.com/AstraDev-Labs/Orion-AI
 site_description: Personal AI, On Personal Devices
 site_author: Orion Contributors
-repo_url: https://github.com/open-orion/Orion
-repo_name: open-orion/Orion
+repo_url: https://github.com/AstraDev-Labs/Orion-AI
+repo_name: AstraDev-Labs/Orion-AI
 edit_uri: edit/main/docs/
 
 copyright: Copyright &copy; 2026 Orion Contributors
@@ -139,7 +139,7 @@ extra:
     index_name: ""   # e.g. "orion"
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/open-orion/Orion
+      link: https://github.com/AstraDev-Labs/Orion-AI
 
 nav:
   - Home: index.md

@@ -38,6 +38,14 @@ class SecurityContext:
     audit_logger: Any = None
 
 
+def _sends_data_off_machine(engine: Any) -> bool:
+    """True for engines that call a remote API (cloud providers, routers)."""
+    from orion.engine._discovery import _CLOUD_ENGINES
+
+    engine_id = str(getattr(engine, "engine_id", "") or "").lower()
+    return not engine_id or engine_id in _CLOUD_ENGINES
+
+
 def setup_security(
     config: Any,
     engine: Any,
@@ -55,7 +63,13 @@ def setup_security(
         scanners: list[BaseScanner] = []
         if config.security.secret_scanner:
             scanners.append(SecretScanner())
-        if config.security.pii_scanner:
+        # PII redaction protects personal data from leaving the machine. For a
+        # local engine nothing leaves, and redacting only broke the user's own
+        # requests: "email 12345678@example.edu" reached the model as
+        # "email [REDACTED:email]", so no draft could ever be addressed.
+        if config.security.pii_scanner and (
+            _sends_data_off_machine(engine) or getattr(config.security, "pii_scan_local", False)
+        ):
             scanners.append(PIIScanner())
 
         if scanners:

@@ -1,190 +1,132 @@
 <div align="center">
-  <img alt="Orion" src="assets/Orion_Horizontal_Logo.png" width="400">
+  <img alt="Orion AI: autonomous, persistent, self-developing" src="assets/orion-banner.jpg" width="100%">
 
-  <p><i>Personal AI, On Personal Devices.</i></p>
+  <br><br>
+
+  <img alt="Orion logo" src="assets/orion-logo.png" width="96">
+
+  <h1>Orion</h1>
+
+  <p><strong>The AI assistant that lives on your computer.</strong><br>
+  It talks, remembers and gets things done, and your conversations stay on your PC.</p>
 
   <p>
-    <a href="https://scalingintelligence.stanford.edu/blogs/orion/"><img src="https://img.shields.io/badge/project-Orion-blue" alt="Project"></a>
-    <a href="https://open-orion.github.io/Orion/"><img src="https://img.shields.io/badge/docs-mkdocs-blue" alt="Docs"></a>
-    <img src="https://img.shields.io/badge/python-%3E%3D3.10-blue" alt="Python">
-    <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
-    <a href="https://discord.gg/YZZRxCAhmm"><img src="https://img.shields.io/badge/discord-join-7289da?logo=discord&logoColor=white" alt="Discord"></a>
-    <a href="https://x.com/OrionAI"><img src="https://img.shields.io/badge/X-@OrionAI-black?logo=x&logoColor=white" alt="X / Twitter"></a>
+    <a href="https://github.com/AstraDev-Labs/Orion-AI/releases"><img src="https://img.shields.io/badge/download-Windows-38bdf8?logo=windows" alt="Download for Windows"></a>
+    <img src="https://img.shields.io/badge/status-alpha-f59e0b" alt="Status: alpha">
+    <img src="https://img.shields.io/badge/version-1.0.1-a78bfa" alt="Version 1.0.1">
+    <img src="https://img.shields.io/badge/license-Apache%202.0-22c55e" alt="License: Apache 2.0">
+  </p>
+
+  <p>
+    <a href="https://astradev-labs.github.io/Orion-AI/">Website</a> ·
+    <a href="https://astradev-labs.github.io/Orion-AI/download">Download</a> ·
+    <a href="https://astradev-labs.github.io/Orion-AI/system-requirements">Check your PC</a> ·
+    <a href="https://astradev-labs.github.io/Orion-AI/docs">Docs</a>
   </p>
 </div>
 
 ---
 
-> **[Documentation](https://open-orion.github.io/Orion/)**
->
-> **[Project Site](https://scalingintelligence.stanford.edu/blogs/orion/)**
->
-> **[Leaderboard](https://open-orion.github.io/Orion/leaderboard/)**
->
-> **[Roadmap](https://open-orion.github.io/Orion/development/roadmap/)**
+> [!WARNING]
+> **Orion is alpha software and has bugs.** Replies can be wrong or slow, voice can mishear, and some features are unfinished. Please [report what breaks](https://github.com/AstraDev-Labs/Orion-AI/issues/new?labels=bug).
 
 ## Why Orion?
 
-> **⚠️ Important Note on Project Scale & Storage**  
-> Orion is a large-scale project designed for advanced on-device AI. To ensure stability and correct behavior, **you must use the given models provided in the configuration**. Please be aware that because these are **local models** designed to run entirely on your own hardware, they require **huge amounts of local storage** and substantial computational resources.
+Most "personal" AI assistants send every request through someone else's servers. Local AI models are now good enough that, for a lot of everyday help, that isn't necessary. Orion runs its AI model, speech recognition and voice on your own Windows PC, and only goes online when a task needs it.
 
-Personal AI agents are exploding in popularity, but nearly all of them still route intelligence through cloud APIs. Your "personal" AI continues to depend on someone else's server. At the same time, our [Intelligence Per Watt](https://www.intelligence-per-watt.ai/) research showed that local language models already handle 88.7% of single-turn chat and reasoning queries, with intelligence efficiency improving 5.3× from 2023 to 2025. The models and hardware are increasingly ready. What has been missing is the software stack to make local-first personal AI practical.
+- **Runs on your computer.** A local AI model (Qwen via Ollama) does the thinking. No account, no subscription, no usage analytics.
+- **Talk or type.** Local speech recognition (Whisper) and a local voice (Kokoro). It greets you when you open it.
+- **Remembers what matters.** A personal knowledge graph keeps your preferences, notes and past conversations across sessions.
+- **Gets things done.** Opens apps, plays music and videos, changes volume, brightness and Wi-Fi, sets reminders, searches the web and checks live weather.
+- **Nothing irreversible without your yes.** WhatsApp, Telegram, Discord and Slack messages, emails and software installs are drafted first and only happen after you approve them.
+- **Grows new abilities.** When no tool fits, Orion can write a new one. It's validated, sandbox-tested and only added after you approve it.
 
-Orion is that stack. It is a framework for local-first personal AI, built around three core ideas: shared primitives for building on-device agents; evaluations that treat energy, FLOPs, latency, and dollar cost as first-class constraints alongside accuracy; and a learning loop that improves models using local trace data. The goal is simple: make it possible to build personal AI agents that run locally by default, calling the cloud only when truly necessary. Orion aims to be both a research platform and a production foundation for local AI, in the spirit of PyTorch.
+## Download and install
 
-## Installation
+1. Download **`OrionSetup-<version>.exe`** from [GitHub Releases](https://github.com/AstraDev-Labs/Orion-AI/releases) or the [website](https://astradev-labs.github.io/Orion-AI/download).
+2. Run it. The alpha installer isn't code-signed yet, so Windows SmartScreen shows *"Windows protected your PC"*. Choose **More info → Run anyway**.
+3. Accept the terms, choose an install folder and features, and click **Install**.
+4. Orion opens and finishes setting itself up: the AI engine, a model sized to your PC's memory, and voice. This takes roughly 5 to 20 minutes, then Orion greets you.
 
-```bash
-curl -fsSL https://orion.ai/install.sh | bash
-```
+No administrator rights are needed. Updates arrive in the app: Orion notifies you and installs signed updates itself.
 
-That's it. The installer handles everything: uv, the Python venv, Ollama, and pulling a small starter model. About 3 minutes on a typical broadband connection. Then:
+## System requirements
 
-```bash
-orion
-```
+| | Minimum | Recommended |
+| --- | --- | --- |
+| **OS** | Windows 10 (1809+), 64-bit | Windows 11 |
+| **Processor** | x64, 4 threads | 8+ threads |
+| **Memory** | 4 GB | 8 GB or more |
+| **Disk** | 12 GB free | 20 GB free |
+| **Graphics** | Not required | NVIDIA GPU with 4 GB+ |
+| **Internet** | Required during setup | Broadband |
 
-The Rust extension and bigger models continue downloading in the background while you chat. Run `orion doctor` to see status.
+Not sure? The [compatibility check](https://astradev-labs.github.io/Orion-AI/system-requirements) tests the PC you're on, right in your browser. macOS and Linux have no installer yet; you can [build from source](#build-from-source).
 
-**Platforms:** macOS (Intel + Apple Silicon), Linux, WSL2 on Windows.
+## Privacy
 
-**Manual install / contributors:** see [docs/getting-started/install.md](docs/getting-started/install.md).
+- Conversations, memories and settings stay in `%USERPROFILE%\.orion` on your PC.
+- The assistant server listens only on your own computer (127.0.0.1).
+- Orion goes online only for setup downloads, update checks, and things you ask for (web search, weather, messaging, connected services).
+- A cloud AI is used only if you add its API key yourself, and personal details it can recognise are removed first.
+- No analytics, no tracking, no Orion servers.
 
-## Quick Start
+Read the full [privacy policy](https://astradev-labs.github.io/Orion-AI/privacy) and [terms of use](https://astradev-labs.github.io/Orion-AI/terms).
 
-```bash
-curl -fsSL https://orion.ai/install.sh | bash
-orion
-```
+> [!CAUTION]
+> Orion's WhatsApp connection uses an unofficial WhatsApp Web client. WhatsApp doesn't endorse it, and using it may break WhatsApp's terms and put your account at risk.
 
-`orion init --preset <name>` switches to a starter config. Available presets: `morning-digest-mac`, `morning-digest-linux`, `morning-digest-minimal`, `deep-research`, `code-assistant`, `scheduled-monitor`, `chat-simple`.
+## Build from source
 
-## Starter Configs
-
-Install any preset with one command:
-
-```bash
-uv run orion init --preset morning-digest-mac   # or any preset below
-```
-
-> Prefix every `orion ...` invocation with `uv run`, or activate the venv first (`source .venv/bin/activate`) so plain `orion ...` works for the rest of your shell session.
-
-| Preset | Use Case | What it does |
-|--------|----------|-------------|
-| `morning-digest-mac` | Daily Briefing (Mac) | Spoken briefing from email, calendar, health, news with Orion voice |
-| `morning-digest-linux` | Daily Briefing (Linux) | Same, with vLLM support for GPU servers |
-| `morning-digest-minimal` | Daily Briefing (minimal) | Just Gmail + Calendar, runs on any machine |
-| `deep-research` | Research Assistant | Multi-hop research across indexed docs with citations |
-| `code-assistant` | Code Companion | Agent with code execution, file I/O, and shell access |
-| `scheduled-monitor` | Persistent Monitor | Stateful agent that runs on a schedule with memory |
-| `chat-simple` | Simple Chat | Lightweight conversation, no tools needed |
+You need [uv](https://docs.astral.sh/uv/), [Ollama](https://ollama.com), and for the desktop app [Rust](https://rustup.rs) and [Node.js](https://nodejs.org) 20+.
 
 ```bash
-# Example: Morning Digest on Mac
-uv run orion init --preset morning-digest-mac
-uv run orion connect gdrive          # one OAuth flow covers Gmail, Calendar, Tasks
-uv run orion digest --fresh          # generate and play your first briefing
-
-# Example: Deep Research
-uv run orion init --preset deep-research
-uv run orion memory index ./docs/    # requires the Rust extension — see Setup above
-uv run orion ask "Summarize all emails about Project X"
+git clone https://github.com/AstraDev-Labs/Orion-AI.git
+cd Orion-AI
+uv sync --extra server --extra speech --extra speech-kokoro
+ollama pull qwen3.5:4b
+ollama pull nomic-embed-text
+uv run orion serve
 ```
 
-### Skills
-
-Skills teach agents how to better use tools and improve their reasoning. Every skill is a tool — agents discover them from a catalog and invoke them on demand.
+Desktop app, in a second terminal:
 
 ```bash
-# Install skills from public sources
-orion skill install hermes:arxiv
-orion skill sync hermes --category research
-
-# Use skills with any agent
-orion ask "Use the code-explainer skill to explain this Python code: for i in range(5): print(i*2)"
-
-# Optimize skills from your trace history
-orion optimize skills --policy dspy
-
-# Benchmark the impact
-orion bench skills --max-samples 5 --seeds 42
+cd frontend
+npm install
+npm run tauri dev
 ```
 
-Import from [Hermes Agent](https://github.com/NousResearch/hermes-agent) (~150 skills), [OpenClaw](https://github.com/openclaw/skills) (~13,700 community skills), or any GitHub repo. Skills follow the [agentskills.io](https://agentskills.io/specification) open standard.
+Windows installer (needs [Inno Setup](https://jrsoftware.org/isinfo.php)):
 
-See the [Skills User Guide](https://open-orion.github.io/Orion/user-guide/skills/) and [Skills Tutorial](https://open-orion.github.io/Orion/tutorials/skills-workflow/) for details.
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build-windows.ps1
+```
 
-### Built-in Agents
+## Project layout
 
-Orion ships with eight built-in agents across three execution modes (on-demand, scheduled, continuous):
-
-| Agent | Type | What it does |
-|-------|------|-------------|
-| `morning_digest` | Scheduled | Daily briefing from email, calendar, health, news — with TTS audio |
-| `deep_research` | On-demand | Multi-hop research with citations across web and local docs |
-| `monitor_operative` | Continuous | Long-horizon monitoring with memory, compression, and retrieval |
-| `orchestrator` | On-demand | Multi-turn reasoning with automatic tool selection |
-| `native_react` | On-demand | ReAct (Thought-Action-Observation) loop agent |
-| `operative` | Continuous | Persistent autonomous agent with state management |
-| `native_openhands` | On-demand | CodeAct — generates and executes Python code |
-| `simple` | On-demand | Single-turn chat, no tools |
-
-See the [User Guide](https://open-orion.github.io/Orion/user-guide/morning-digest/) and [Tutorials](https://open-orion.github.io/Orion/tutorials/) for detailed setup instructions.
-
-Full documentation — including Docker deployment, cloud engines, development setup, and tutorials — at **[open-orion.github.io/Orion](https://open-orion.github.io/Orion/)**.
-
-## Community
-
-- **GitHub:** [github.com/open-orion/Orion](https://github.com/open-orion/Orion)
-- **Discord:** [discord.gg/YZZRxCAhmm](https://discord.gg/YZZRxCAhmm)
-- **X / Twitter:** [@OrionAI](https://x.com/OrionAI)
-- **Docs:** [open-orion.github.io/Orion](https://open-orion.github.io/Orion/)
+| Path | What's there |
+| --- | --- |
+| `src/orion/` | Python agent runtime: FastAPI server, agents, tools, memory, speech |
+| `rust/` | `orion_rust`, a compiled extension for performance-critical paths |
+| `frontend/` | React HUD and the Tauri 2 desktop app (`frontend/src-tauri`) |
+| `installer/` | Inno Setup installer plus the PowerShell setup and uninstall scripts |
+| `website/` | The Orion website (Astro), deployed to GitHub Pages |
+| `tests/` | Test suite |
+| `docs/` | Developer documentation |
 
 ## Contributing
 
-We welcome contributions! See the [Contributing Guide](CONTRIBUTING.md) for incentives, contribution types, and the PR process.
-
-Quick start for contributors:
+Bug reports, ideas and pull requests are welcome. See the [contributing guide](CONTRIBUTING.md).
 
 ```bash
-git clone https://github.com/open-orion/Orion.git
-cd Orion
 uv sync --extra dev
 uv run pre-commit install
-uv run pytest tests/ -v
+uv run pytest tests/
 ```
 
-Browse the [Roadmap](https://open-orion.github.io/Orion/development/roadmap/) for areas where help is needed. Comment **"take"** on any issue to get auto-assigned.
-
-## About
-
-Orion is part of [Intelligence Per Watt](https://www.intelligence-per-watt.ai/), a research initiative studying the intelligence efficiency of AI systems. The project is developed at [Hazy Research](https://hazyresearch.stanford.edu/) and the [Scaling Intelligence Lab](https://scalingintelligence.stanford.edu/) at [Stanford SAIL](https://ai.stanford.edu/).
-
-## Sponsors
-
-<p>
-  <a href="https://www.laude.org/">Laude Institute</a> &bull;
-  <a href="https://datascience.stanford.edu/marlowe">Stanford Marlowe</a> &bull;
-  <a href="https://cloud.google.com/">Google Cloud Platform</a> &bull;
-  <a href="https://lambda.ai/">Lambda Labs</a> &bull;
-  <a href="https://ollama.com/">Ollama</a> &bull;
-  <a href="https://research.ibm.com/">IBM Research</a> &bull;
-  <a href="https://hai.stanford.edu/">Stanford HAI</a>
-</p>
-
-## Citation
-```bibtex
-@misc{saadfalcon2026orionpersonalaipersonal,
-      title={Orion: Personal AI, On Personal Devices}, 
-      author={Jon Saad-Falcon and Avanika Narayan and Robby Manihani and Tanvir Bhathal and Herumb Shandilya and Hakki Orhun Akengin and Gabriel Bo and Andrew Park and Matthew Hart and Caia Costello and Chuan Li and Christopher Ré and Azalia Mirhoseini},
-      year={2026},
-      eprint={2605.17172},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2605.17172}, 
-}
-```
+Found a security problem? Please report it [privately](https://github.com/AstraDev-Labs/Orion-AI/security/advisories/new), not in a public issue.
 
 ## License
 
-[Apache 2.0](LICENSE)
+Orion is built by **Tharun** and released under the [Apache License 2.0](LICENSE).

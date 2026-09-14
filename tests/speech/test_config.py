@@ -8,8 +8,11 @@ def test_speech_config_defaults():
     assert cfg.backend == "auto"
     assert cfg.model == "base"
     assert cfg.language == ""
-    assert cfg.device == "auto"
-    assert cfg.compute_type == "float16"
+    # Defaults to cpu, not auto: cuda DLLs are frequently missing on Windows
+    # and CPU avoids contending with Ollama for VRAM (see SpeechConfig).
+    assert cfg.device == "cpu"
+    # int8 pairs with the cpu default; float16 needs GPU support.
+    assert cfg.compute_type == "int8"
 
 
 def test_orion_config_has_speech():

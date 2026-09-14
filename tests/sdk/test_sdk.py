@@ -8,7 +8,7 @@ import pytest
 
 import orion
 from orion.core.config import OrionConfig
-from orion.sdk import Orion, MemoryHandle
+from orion.sdk import MemoryHandle, Orion
 
 
 def _make_engine(content="Hello from SDK"):

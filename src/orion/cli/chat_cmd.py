@@ -54,9 +54,22 @@ def chat(
 
     register_builtin_models()
 
-    resolved = get_engine(config, engine_key)
+    # Honour the configured preference the same way ``orion ask`` does, so a
+    # bare ``orion`` and ``orion ask`` never resolve to different engines.
+    effective_engine_key = engine_key or config.intelligence.preferred_engine or None
+    resolved = get_engine(config, effective_engine_key)
     if resolved is None:
-        console.print("[red]No inference engine available.[/red]")
+        console.print(
+            "[red bold]No inference engine available.[/red bold]\n\n"
+            "Make sure an engine is running:\n"
+            "  [cyan]ollama serve[/cyan]          — start Ollama\n"
+            "  [cyan]vllm serve <model>[/cyan]    — start vLLM\n"
+            "  [cyan]llama-server -m <gguf>[/cyan] — start llama.cpp\n\n"
+            "Or set OPENAI_API_KEY / ANTHROPIC_API_KEY for cloud inference.\n\n"
+            "[dim]If Ollama is installed, it may still be starting up — "
+            "wait a moment and retry, or check it with:[/dim]\n"
+            "  [cyan]orion doctor[/cyan]"
+        )
         sys.exit(1)
 
     engine_name, engine = resolved

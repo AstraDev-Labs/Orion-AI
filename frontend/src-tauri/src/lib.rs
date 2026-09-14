@@ -1,8 +1,10 @@
+mod app_update;
+
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
-use tauri::tray::TrayIconBuilder;
-use tauri::Manager;
+use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::MacosLauncher;
 use tokio::sync::Mutex;
 
@@ -59,6 +61,7 @@ fn total_ram_gb() -> f64 {
         use std::process::Command;
         // wmic returns TotalVisibleMemorySize in KB
         if let Ok(output) = Command::new("wmic")
+            .no_window()
             .args(["OS", "get", "TotalVisibleMemorySize", "/value"])
             .output()
         {
@@ -102,11 +105,112 @@ fn preferred_model() -> &'static str {
     }
 }
 
+/// Start a console program without a console window of its own.
+///
+/// Orion.exe is a windowed app, so every console child it started (the API
+/// server, Ollama, uv, setup) opened a terminal window next to the app. With
+/// this flag they run in a hidden console, which their own children (the
+/// WhatsApp bridge, PowerShell calls from tools) share rather than opening more.
+trait NoWindow {
+    fn no_window(&mut self) -> &mut Self;
+}
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+impl NoWindow for std::process::Command {
+    fn no_window(&mut self) -> &mut Self {
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            self.creation_flags(CREATE_NO_WINDOW);
+        }
+        self
+    }
+}
+
+impl NoWindow for tokio::process::Command {
+    fn no_window(&mut self) -> &mut Self {
+        #[cfg(target_os = "windows")]
+        self.creation_flags(CREATE_NO_WINDOW);
+        self
+    }
+}
+
 /// Get the user home directory, handling both Unix (HOME) and Windows (USERPROFILE).
 fn home_dir() -> String {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_default()
+}
+
+/// Where setup puts Orion's runtime\, tools\, models\ and install.json.
+///
+/// An installed app keeps them in its own folder, which the user picked in
+/// the installer (so a D: drive install keeps the multi-GB downloads off C:).
+/// Otherwise %LOCALAPPDATA%\Orion on Windows and ~/.orion-app elsewhere.
+fn install_root() -> std::path::PathBuf {
+    if let Some(exe_dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        if exe_dir.join("setup").join("orion-setup.ps1").exists() {
+            return exe_dir;
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            if !local.is_empty() {
+                return std::path::PathBuf::from(local).join("Orion");
+            }
+        }
+    }
+    std::path::PathBuf::from(home_dir()).join(".orion-app")
+}
+
+/// install.json written by installer/windows/orion-setup.ps1, if setup ran.
+fn installed_info() -> Option<serde_json::Value> {
+    let raw = std::fs::read_to_string(install_root().join("install.json")).ok()?;
+    // Windows PowerShell 5.1 writes UTF-8 with a byte-order mark.
+    serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok()
+}
+
+/// The model setup chose for this machine's memory.
+fn installed_model() -> Option<String> {
+    installed_info()?
+        .get("model")?
+        .as_str()
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty())
+}
+
+/// A folder recorded in install.json (e.g. "hf_home"), if it is set.
+fn installed_dir(key: &str) -> Option<std::path::PathBuf> {
+    installed_info()?
+        .get(key)?
+        .as_str()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+/// The runtime's own `orion` executable, when a virtual environment exists.
+fn venv_orion(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    let candidates = [
+        root.join(".venv").join("Scripts").join("orion.exe"),
+        root.join(".venv").join("bin").join("orion"),
+    ];
+    candidates.into_iter().find(|p| p.exists())
+}
+
+/// Setup script and backend payload shipped next to the installed app.
+fn bundled_setup() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let script = exe_dir.join("setup").join("orion-setup.ps1");
+    let payload = exe_dir.join("backend");
+    if script.exists() && payload.join("pyproject.toml").exists() {
+        Some((script, payload))
+    } else {
+        None
+    }
 }
 
 /// Resolve full path to a binary by checking common locations.
@@ -159,6 +263,7 @@ fn resolve_bin(name: &str) -> String {
     #[cfg(target_os = "windows")]
     {
         if let Ok(output) = std::process::Command::new("where")
+            .no_window()
             .arg(format!("{name}.exe"))
             .output()
         {
@@ -195,6 +300,12 @@ fn resolve_bin(name: &str) -> String {
 /// Checks OPENORION_ROOT env var, walks up from the executable, then
 /// probes common clone locations.
 fn find_project_root() -> Option<std::path::PathBuf> {
+    // 0. The runtime installed by Orion's setup.
+    let installed = install_root().join("runtime");
+    if installed.join("pyproject.toml").exists() && venv_orion(&installed).is_some() {
+        return Some(installed);
+    }
+
     // 1. Explicit env var override
     if let Ok(root) = std::env::var("OPENORION_ROOT") {
         let path = std::path::PathBuf::from(&root);
@@ -287,6 +398,16 @@ struct ChildHandle {
 
 impl ChildHandle {
     async fn kill(&mut self) {
+        // The API server is a launcher (orion.exe) running python.exe, which
+        // runs another python.exe: killing only the top process left the
+        // server holding port 8000 after Orion quit. Take the whole tree.
+        #[cfg(target_os = "windows")]
+        if let Some(pid) = self.child.id() {
+            let _ = std::process::Command::new("taskkill")
+                .no_window()
+                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                .status();
+        }
         let _ = self.child.kill().await;
     }
 }
@@ -340,6 +461,10 @@ impl Default for SetupStatus {
 }
 
 type SharedStatus = Arc<Mutex<SetupStatus>>;
+
+/// Latest clipboard text ORION has seen — shared between the background
+/// watcher loop and the clipboard-panel window's commands.
+type SharedClipboard = Arc<Mutex<String>>;
 
 // ---------------------------------------------------------------------------
 // Health-check helpers
@@ -409,6 +534,141 @@ async fn pull_model(model: &str) -> Result<(), String> {
 // Backend boot sequence (runs in background after app launch)
 // ---------------------------------------------------------------------------
 
+/// Spawn the Python API server. Shared by first boot and by the supervisor,
+/// so a restarted backend is launched exactly the same way as the original.
+fn spawn_orion_server(
+    uv_bin: &str,
+    root: &std::path::Path,
+    startup_model: &str,
+) -> std::io::Result<tokio::process::Child> {
+    let serve_args = [
+        "serve".to_string(),
+        "--port".to_string(),
+        ORION_PORT.to_string(),
+        "--model".to_string(),
+        startup_model.to_string(),
+        "--agent".to_string(),
+        "orchestrator".to_string(),
+    ];
+    // Run the environment's own executable when there is one. `uv run` syncs
+    // first, and a sync removes the compiled orion_rust extension (it is
+    // installed from a wheel, not declared in the lock), breaking the backend.
+    let mut cmd = match venv_orion(root) {
+        Some(exe) => {
+            let mut c = tokio::process::Command::new(exe);
+            c.args(&serve_args);
+            c
+        }
+        None => {
+            let mut c = tokio::process::Command::new(uv_bin);
+            c.args(["run", "--no-sync", "orion"]).args(&serve_args);
+            c
+        }
+    };
+    cmd.no_window()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .current_dir(root);
+
+    // A private Node.js from setup (used by the WhatsApp bridge) goes first on PATH.
+    let node_dir = install_root().join("tools").join("node");
+    if node_dir.join(if cfg!(windows) { "node.exe" } else { "node" }).exists() {
+        let current = std::env::var("PATH").unwrap_or_default();
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        cmd.env("PATH", format!("{}{}{}", node_dir.display(), sep, current));
+    }
+    // Voice models (speech recognition, Kokoro) downloaded into the install folder.
+    if let Some(hf_home) = installed_dir("hf_home") {
+        cmd.env("HF_HOME", hf_home);
+    }
+
+    // Inject cloud API keys from ~/.orion/cloud-keys.env
+    for (key, value) in read_cloud_keys() {
+        cmd.env(&key, &value);
+    }
+    cmd.spawn()
+}
+
+/// Restart the API server if its process exits unexpectedly.
+///
+/// `boot_backend` only ran once, at startup, so a backend that died left the
+/// app sitting on a permanently unresponsive window until it was relaunched
+/// by hand. Only an actual process exit triggers a restart -- polling /health
+/// would misread a long local-model inference as a crash. Restarts are capped
+/// so a backend that cannot start (a bad config, say) surfaces an error
+/// instead of respawning forever.
+async fn supervise_backend(
+    backend: SharedBackend,
+    status: SharedStatus,
+    uv_bin: String,
+    root: std::path::PathBuf,
+    startup_model: String,
+) {
+    const MAX_RESTARTS: u32 = 5;
+    const POLL: Duration = Duration::from_secs(5);
+    let mut restarts: u32 = 0;
+
+    loop {
+        tokio::time::sleep(POLL).await;
+
+        let exited = {
+            let mut mgr = backend.lock().await;
+            match mgr.orion {
+                // `None` means shutdown deliberately cleared it -- stop watching.
+                None => return,
+                Some(ref mut h) => match h.child.try_wait() {
+                    Ok(Some(_status)) => true,
+                    Ok(None) => false,
+                    Err(_) => false,
+                },
+            }
+        };
+
+        if !exited {
+            continue;
+        }
+
+        if restarts >= MAX_RESTARTS {
+            let mut s = status.lock().await;
+            s.server_ready = false;
+            s.error = Some(format!(
+                "The Orion backend stopped {} times and could not be restarted. \
+                 Check ~/.orion/config.toml, then restart the app.",
+                restarts
+            ));
+            return;
+        }
+
+        restarts += 1;
+        {
+            let mut s = status.lock().await;
+            s.server_ready = false;
+            s.phase = "restarting".into();
+            s.detail = format!("Backend stopped unexpectedly — restarting ({}/{})...", restarts, MAX_RESTARTS);
+        }
+
+        match spawn_orion_server(&uv_bin, &root, &startup_model) {
+            Ok(child) => {
+                backend.lock().await.orion = Some(ChildHandle { child });
+            }
+            Err(e) => {
+                let mut s = status.lock().await;
+                s.error = Some(format!("Could not restart the Orion backend: {}", e));
+                return;
+            }
+        }
+
+        let server_url = format!("http://127.0.0.1:{}/health", ORION_PORT);
+        if wait_for_url(&server_url, Duration::from_secs(300)).await {
+            let mut s = status.lock().await;
+            s.server_ready = true;
+            s.phase = "ready".into();
+            s.detail = "All systems ready.".into();
+            s.error = None;
+        }
+    }
+}
+
 async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
     // Phase 1: Start Ollama
     {
@@ -417,11 +677,32 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         s.detail = "Starting inference engine...".into();
     }
 
-    // Try the bundled sidecar first, fall back to system ollama
+    // Setup has not finished (it was cancelled, failed, or the installer ran
+    // silently offline): finish it before anything else, since it installs
+    // Ollama itself. install.json is only written once setup succeeds.
+    if installed_info().is_none() {
+        if let Some((script, payload)) = bundled_setup() {
+            run_bundled_setup(&script, &payload, &status).await;
+            if installed_info().is_none() {
+                return; // run_bundled_setup reported the error
+            }
+        }
+    }
+
+    // The Ollama setup installed or found, else the one on this system.
     let ollama_child = {
-        let ollama_bin = resolve_bin("ollama");
-        let sidecar = tokio::process::Command::new(&ollama_bin)
-            .arg("serve")
+        let ollama_bin = installed_dir("ollama")
+            .filter(|p| p.exists())
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| resolve_bin("ollama"));
+        let mut sidecar_cmd = tokio::process::Command::new(&ollama_bin);
+        sidecar_cmd.no_window().arg("serve");
+        // Models live where setup put them (the install folder on a new install).
+        // Passed explicitly: this process's environment predates setup setting it.
+        if let Some(models) = installed_dir("ollama_models") {
+            sidecar_cmd.env("OLLAMA_MODELS", models);
+        }
+        let sidecar = sidecar_cmd
             .env("OLLAMA_HOST", format!("127.0.0.1:{}", OLLAMA_PORT))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -451,22 +732,23 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         s.detail = "Inference engine ready.".into();
     }
 
-    // Phase 2: Pull one small model (qwen3.5:2b) so the app can open fast.
-    // Remaining models are pulled in the background after the server starts.
+    // Phase 2: make sure the model this machine uses is present. Setup picked
+    // it from this PC's memory (install.json); without setup, pick the same way.
+    let wanted_model: String = installed_model().unwrap_or_else(|| preferred_model().to_string());
     {
         let mut s = status.lock().await;
         s.phase = "model".into();
-        s.detail = format!("Checking for {}...", STARTUP_MODEL);
+        s.detail = format!("Checking for {}...", wanted_model);
     }
 
-    if !ollama_has_model(STARTUP_MODEL).await {
+    if !ollama_has_model(&wanted_model).await {
         {
             let mut s = status.lock().await;
-            s.detail = format!("Downloading {}... (this may take a minute)", STARTUP_MODEL);
+            s.detail = format!("Downloading {}... (this may take a while)", wanted_model);
         }
-        if let Err(e) = pull_model(STARTUP_MODEL).await {
+        if let Err(e) = pull_model(&wanted_model).await {
             // If the startup model fails, try the tiny fallback
-            eprintln!("Warning: failed to pull {}: {}", STARTUP_MODEL, e);
+            eprintln!("Warning: failed to pull {}: {}", wanted_model, e);
             if !ollama_has_model(FALLBACK_MODEL).await {
                 let mut s = status.lock().await;
                 s.detail = format!("Downloading {}...", FALLBACK_MODEL);
@@ -494,9 +776,23 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
     }
 
     let uv_bin = resolve_bin("uv");
+    let mut project_root = find_project_root();
 
-    // Verify uv is actually installed
-    if !std::path::Path::new(&uv_bin).exists() && uv_bin == "uv" {
+    // No runtime yet (setup was skipped, cancelled or failed): run the bundled
+    // setup again, showing its progress on the loading screen.
+    if project_root.is_none() {
+        if let Some((script, payload)) = bundled_setup() {
+            run_bundled_setup(&script, &payload, &status).await;
+            project_root = find_project_root();
+            if project_root.is_none() {
+                return; // run_bundled_setup reported the error
+            }
+        }
+    }
+
+    // Verify uv is actually installed (only needed for a developer checkout)
+    let has_runtime = project_root.as_ref().map(|r| venv_orion(r).is_some()).unwrap_or(false);
+    if !has_runtime && !std::path::Path::new(&uv_bin).exists() && uv_bin == "uv" {
         let mut s = status.lock().await;
         s.error = Some(
             "Could not find 'uv' (Python package manager). \
@@ -505,8 +801,6 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         );
         return;
     }
-
-    let mut project_root = find_project_root();
 
     if project_root.is_none() {
         // Auto-clone on first launch
@@ -543,11 +837,12 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         }
 
         let clone_result = tokio::process::Command::new(&git_bin)
+            .no_window()
             .args([
                 "clone",
                 "--depth",
                 "1",
-                "https://github.com/open-orion/Orion.git",
+                "https://github.com/AstraDev-Labs/Orion-AI.git",
                 &clone_target,
             ])
             .stdout(std::process::Stdio::null())
@@ -564,7 +859,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
                     let mut s = status.lock().await;
                     s.error = Some(format!(
                         "Failed to download Orion: {}. \
-                         Clone manually: git clone https://github.com/open-orion/Orion.git {}",
+                         Clone manually: git clone https://github.com/AstraDev-Labs/Orion-AI.git {}",
                         stderr.trim(),
                         clone_target,
                     ));
@@ -574,7 +869,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
                     let mut s = status.lock().await;
                     s.error = Some(format!(
                         "Failed to download Orion: {}. \
-                         Clone manually: git clone https://github.com/open-orion/Orion.git {}",
+                         Clone manually: git clone https://github.com/AstraDev-Labs/Orion-AI.git {}",
                         e, clone_target,
                     ));
                     return;
@@ -617,6 +912,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             {
                 // Find the PID holding the port via netstat, then kill it
                 if let Ok(output) = tokio::process::Command::new("cmd")
+                    .no_window()
                     .args(["/C", &format!(
                         "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :{port} ^| findstr LISTENING') do taskkill /PID %a /F",
                         port = ORION_PORT,
@@ -631,35 +927,31 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         }
     }
 
-    // Start with STARTUP_MODEL (just pulled) or preferred if already available.
-    let pref = preferred_model();
-    let startup_model = if ollama_has_model(pref).await {
-        pref
-    } else if ollama_has_model(STARTUP_MODEL).await {
-        STARTUP_MODEL
+    let startup_model: String = if ollama_has_model(&wanted_model).await {
+        wanted_model.clone()
     } else {
-        FALLBACK_MODEL
+        FALLBACK_MODEL.to_string()
     };
 
     let root = project_root.as_ref().unwrap();
 
-    // Install dependencies automatically (handles fresh clones)
-    {
-        let mut s = status.lock().await;
-        s.detail = "Installing dependencies...".into();
+    // A developer checkout without an environment yet: create one. --inexact
+    // keeps packages installed outside the lock (the orion_rust extension),
+    // which a plain `uv sync` would delete.
+    if venv_orion(root).is_none() {
+        {
+            let mut s = status.lock().await;
+            s.detail = "Installing dependencies...".into();
+        }
+        let _ = tokio::process::Command::new(&uv_bin)
+            .no_window()
+            .args(["sync", "--inexact", "--extra", "server", "--extra", "speech", "--extra", "speech-kokoro"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .current_dir(root)
+            .status()
+            .await;
     }
-    let _ = tokio::process::Command::new(&uv_bin)
-        .args([
-            "sync",
-            "--extra", "server",
-            "--extra", "inference-cloud",
-            "--extra", "inference-google",
-        ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .current_dir(root)
-        .status()
-        .await;
 
     {
         let mut s = status.lock().await;
@@ -670,27 +962,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         );
     }
 
-    let mut cmd = tokio::process::Command::new(&uv_bin);
-    cmd.args([
-        "run",
-        "orion",
-        "serve",
-        "--port",
-        &ORION_PORT.to_string(),
-        "--model",
-        startup_model,
-        "--agent",
-        "simple",
-    ])
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::piped())
-    .current_dir(root);
-
-    // Inject cloud API keys from ~/.orion/cloud-keys.env
-    for (key, value) in read_cloud_keys() {
-        cmd.env(&key, &value);
-    }
-    let orion_child = cmd.spawn();
+    let orion_child = spawn_orion_server(&uv_bin, root, &startup_model);
 
     match orion_child {
         Ok(child) => {
@@ -750,20 +1022,87 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         s.detail = "All systems ready.".into();
     }
 
-    // Phase 4: Pull remaining Qwen3.5 models in the background.
-    // The app is already usable with qwen3.5:2b; as each model finishes
-    // it appears in the model list automatically.
-    let fitting = models_that_fit();
-    tokio::spawn(async move {
-        for model in fitting {
-            if model != STARTUP_MODEL && model != FALLBACK_MODEL {
-                if !ollama_has_model(model).await {
-                    let _ = pull_model(model).await;
-                }
+    // Keep the backend alive for the rest of the session.
+    {
+        let sup_backend = Arc::clone(&backend);
+        let sup_status = Arc::clone(&status);
+        let sup_uv = uv_bin.clone();
+        let sup_root = root.to_path_buf();
+        let sup_model = startup_model.to_string();
+        tokio::spawn(async move {
+            supervise_backend(sup_backend, sup_status, sup_uv, sup_root, sup_model).await;
+        });
+    }
+
+    // No background downloads of other model sizes: that silently fetched
+    // every model that fits in memory (tens of GB on a large machine). Extra
+    // models are pulled only when the user asks for one.
+}
+
+/// Run the bundled setup script and mirror its progress into the boot status.
+#[cfg(target_os = "windows")]
+async fn run_bundled_setup(script: &std::path::Path, payload: &std::path::Path, status: &SharedStatus) {
+    let status_file = install_root().join("setup-status.json");
+    let _ = std::fs::create_dir_all(install_root());
+    let _ = std::fs::remove_file(&status_file);
+    {
+        let mut s = status.lock().await;
+        s.phase = "setup".into();
+        s.detail = "Finishing Orion setup...".into();
+        s.error = None;
+    }
+    let child = tokio::process::Command::new("powershell.exe")
+        .no_window()
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
+        .arg(script)
+        .arg("-PayloadDir")
+        .arg(payload)
+        .arg("-InstallRoot")
+        .arg(install_root())
+        .arg("-StatusFile")
+        .arg(&status_file)
+        .arg("-NoPause")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            let mut s = status.lock().await;
+            s.error = Some(format!("Could not run Orion setup: {}", e));
+            return;
+        }
+    };
+    loop {
+        if let Ok(Some(_)) = child.try_wait() {
+            break;
+        }
+        if let Ok(raw) = std::fs::read_to_string(&status_file) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim_start_matches('\u{feff}')) {
+                let label = v.get("label").and_then(|x| x.as_str()).unwrap_or("");
+                let detail = v.get("detail").and_then(|x| x.as_str()).unwrap_or("");
+                let mut s = status.lock().await;
+                s.detail = if detail.is_empty() { format!("Setup: {}", label) } else { format!("Setup: {} ({})", label, detail) };
             }
         }
-    });
+        tokio::time::sleep(Duration::from_millis(700)).await;
+    }
+    if let Ok(raw) = std::fs::read_to_string(&status_file) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw.trim_start_matches('\u{feff}')) {
+            if let Some(err) = v.get("error").and_then(|x| x.as_str()).filter(|e| !e.is_empty()) {
+                let mut s = status.lock().await;
+                s.error = Some(format!(
+                    "Setup could not finish: {} (log: {})",
+                    err,
+                    install_root().join("setup.log").display()
+                ));
+            }
+        }
+    }
 }
+
+#[cfg(not(target_os = "windows"))]
+async fn run_bundled_setup(_script: &std::path::Path, _payload: &std::path::Path, _status: &SharedStatus) {}
 
 // ---------------------------------------------------------------------------
 // Tauri commands
@@ -781,6 +1120,107 @@ async fn get_setup_status(state: tauri::State<'_, SharedStatus>) -> Result<Setup
 #[tauri::command]
 fn get_api_base() -> String {
     api_base()
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard Intelligence — watches the clipboard and pops a small floating
+// panel (Translate / Summarize / Explain / Fix) near the cursor whenever new
+// text is copied.
+// ---------------------------------------------------------------------------
+
+const CLIPBOARD_PANEL_LABEL: &str = "clipboard-panel";
+/// Setting for popping the clipboard panel up on every copy. Off by default:
+/// a window appearing over whatever you were doing each time you copied text
+/// got in the way. Switch it on from the tray menu.
+const CLIPBOARD_PANEL_SETTING: &str = "clipboard_panel_on_copy";
+const CLIPBOARD_MIN_LEN: usize = 3;
+const CLIPBOARD_MAX_LEN: usize = 20_000;
+
+#[tauri::command]
+async fn get_pending_clipboard_text(state: tauri::State<'_, SharedClipboard>) -> Result<String, String> {
+    Ok(state.lock().await.clone())
+}
+
+/// Called by the panel after it writes a result back to the clipboard, so the
+/// watcher doesn't immediately re-trigger on the text ORION itself just wrote.
+#[tauri::command]
+async fn mark_clipboard_seen(text: String, state: tauri::State<'_, SharedClipboard>) -> Result<(), String> {
+    *state.lock().await = text;
+    Ok(())
+}
+
+#[tauri::command]
+async fn close_clipboard_panel(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window(CLIPBOARD_PANEL_LABEL) {
+        let _ = win.close();
+    }
+    Ok(())
+}
+
+fn show_clipboard_panel(app: &tauri::AppHandle) {
+    // Replace any panel that's already open rather than stacking windows.
+    if let Some(win) = app.get_webview_window(CLIPBOARD_PANEL_LABEL) {
+        let _ = win.close();
+    }
+
+    let (x, y) = app
+        .get_webview_window("main")
+        .and_then(|w| w.cursor_position().ok())
+        .map(|p| (p.x, p.y))
+        .unwrap_or((200.0, 200.0));
+
+    let builder = WebviewWindowBuilder::new(
+        app,
+        CLIPBOARD_PANEL_LABEL,
+        WebviewUrl::App("index.html?panel=clipboard".into()),
+    )
+    .title("Orion")
+    .inner_size(340.0, 300.0)
+    .position(x, y)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .shadow(true)
+    .visible(true)
+    .focused(true);
+
+    if let Err(e) = builder.build() {
+        eprintln!("Failed to create clipboard panel: {e}");
+    }
+}
+
+/// Poll the system clipboard for new text and pop the panel when it changes.
+/// Clipboard reads can transiently fail (e.g. another app holding the
+/// clipboard open) — those are ignored and retried on the next tick.
+async fn run_clipboard_watcher(app: tauri::AppHandle, state: SharedClipboard) {
+    let mut interval = tokio::time::interval(Duration::from_millis(700));
+    loop {
+        interval.tick().await;
+
+        let text = match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let trimmed = text.trim();
+        if trimmed.len() < CLIPBOARD_MIN_LEN || trimmed.len() > CLIPBOARD_MAX_LEN {
+            continue;
+        }
+
+        {
+            let mut last = state.lock().await;
+            if *last == text {
+                continue;
+            }
+            *last = text.clone();
+        }
+
+        // Still tracked above while off, so switching it on never pops up
+        // for something copied earlier.
+        if app_update::bool_setting(CLIPBOARD_PANEL_SETTING, false) {
+            show_clipboard_panel(&app);
+        }
+    }
 }
 
 #[tauri::command]
@@ -982,6 +1422,7 @@ async fn run_orion_command(args: Vec<String>) -> Result<String, String> {
     cmd_args.extend(args);
     let uv_bin = resolve_bin("uv");
     let output = tokio::process::Command::new(&uv_bin)
+        .no_window()
         .args(&cmd_args)
         .output()
         .await
@@ -1569,6 +2010,35 @@ async fn get_overlay_conversation() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn app_update_supported() -> bool {
+    app_update::is_supported()
+}
+
+#[tauri::command]
+async fn get_app_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, app_update::SharedUpdate>,
+) -> Result<Option<app_update::AppUpdate>, String> {
+    Ok(app_update::cached(&app, state.inner()).await)
+}
+
+#[tauri::command]
+async fn check_app_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, app_update::SharedUpdate>,
+) -> Result<Option<app_update::AppUpdate>, String> {
+    app_update::check_now(&app, state.inner()).await
+}
+
+#[tauri::command]
+async fn install_app_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, app_update::SharedUpdate>,
+) -> Result<(), String> {
+    app_update::install(&app, state.inner()).await
+}
+
+#[tauri::command]
 async fn toggle_overlay() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     on_main_thread(|| unsafe { native_overlay::toggle() });
@@ -1583,20 +2053,90 @@ async fn hide_overlay() -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// Tray
+// ---------------------------------------------------------------------------
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+/// One short line for the tray menu and tooltip.
+fn tray_status_text(s: &SetupStatus) -> String {
+    if s.error.is_some() {
+        return "Needs attention - open Orion".into();
+    }
+    if s.server_ready {
+        return match installed_model() {
+            Some(model) => format!("Ready - {}", model),
+            None => "Ready".into(),
+        };
+    }
+    match s.phase.as_str() {
+        "setup" => "Finishing setup...".into(),
+        "model" => "Preparing the AI model...".into(),
+        _ => "Starting...".into(),
+    }
+}
+
+/// Earlier desktop builds registered the web dashboard's offline service
+/// worker inside the app's WebView, and it kept serving the previous version's
+/// interface after every install or update (the worker only swaps itself out
+/// whenever WebView2 next decides to check). Delete its storage once per app
+/// version, before the window starts. Saved app data lives elsewhere in the
+/// profile and is untouched.
+fn clear_stale_service_worker(identifier: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        let Ok(local) = std::env::var("LOCALAPPDATA") else { return };
+        let profile = std::path::PathBuf::from(local).join(identifier).join("EBWebView");
+        let marker = profile.join(format!("orion-sw-cleared-{}", env!("CARGO_PKG_VERSION")));
+        if !profile.exists() || marker.exists() {
+            return;
+        }
+        let worker_dir = profile.join("Default").join("Service Worker");
+        // Fails while another Orion window holds the profile open; try again
+        // next launch rather than recording it as done.
+        if !worker_dir.exists() || std::fs::remove_dir_all(&worker_dir).is_ok() {
+            let _ = std::fs::write(&marker, b"");
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = identifier;
+}
+
+#[cfg(target_os = "windows")]
+const AUTOSTART_LABEL: &str = "Start with Windows";
+#[cfg(not(target_os = "windows"))]
+const AUTOSTART_LABEL: &str = "Start at login";
+
+// ---------------------------------------------------------------------------
 // App entry point
 // ---------------------------------------------------------------------------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    clear_stale_service_worker(&context.config().identifier);
+
     let backend: SharedBackend = Arc::new(Mutex::new(BackendManager::default()));
     let status: SharedStatus = Arc::new(Mutex::new(SetupStatus::default()));
+    let clipboard_state: SharedClipboard = Arc::new(Mutex::new(String::new()));
 
     let boot_backend_ref = backend.clone();
     let boot_status_ref = status.clone();
+    let tray_status_ref = status.clone();
+    let update_state: app_update::SharedUpdate = Arc::new(Mutex::new(app_update::UpdateState::default()));
+    let clipboard_watch_ref = clipboard_state.clone();
 
     tauri::Builder::default()
         .manage(backend.clone())
         .manage(status.clone())
+        .manage(clipboard_state.clone())
+        .manage(update_state.clone())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -1608,40 +2148,142 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_focus();
-            }
+            // The window may be hidden in the tray: bring it back.
+            show_main_window(app);
         }))
+        // Closing the window keeps Orion running in the tray, so WhatsApp
+        // auto-replies, reminders and the backend keep working. Quit from the
+        // tray menu stops everything.
+        .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+                static HINT_SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if !HINT_SHOWN.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    use tauri_plugin_notification::NotificationExt;
+                    let _ = window
+                        .app_handle()
+                        .notification()
+                        .builder()
+                        .title("Orion is still running")
+                        .body("Orion keeps working in the background. Click the tray icon to open it, or right-click it to quit.")
+                        .show();
+                }
+            }
+        })
         .setup(move |app| {
-            // System tray
-            let show = MenuItemBuilder::with_id("show", "Show / Hide").build(app)?;
-            let health = MenuItemBuilder::with_id("health", "Health: starting...")
+            // System tray: click to open, right-click for the menu.
+            let open = MenuItemBuilder::with_id("show", "Open Orion").build(app)?;
+            let health = MenuItemBuilder::with_id("health", "Starting...")
                 .enabled(false)
                 .build(app)?;
+            let autostart_on = {
+                use tauri_plugin_autostart::ManagerExt;
+                app.autolaunch().is_enabled().unwrap_or(false)
+            };
+            let autostart = CheckMenuItemBuilder::with_id("autostart", AUTOSTART_LABEL)
+                .checked(autostart_on)
+                .build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit Orion").build(app)?;
+            let clipboard_toggle = CheckMenuItemBuilder::with_id("clipboard_panel", "Show actions when I copy text")
+                .checked(app_update::bool_setting(CLIPBOARD_PANEL_SETTING, false))
+                .build(app)?;
+            let updates_supported = app_update::is_supported();
+            let update_item = MenuItemBuilder::with_id("update", "Check for updates").build(app)?;
+            let auto_update = CheckMenuItemBuilder::with_id("auto_update", "Check for updates automatically")
+                .checked(app_update::auto_check_enabled())
+                .build(app)?;
 
-            let menu = MenuBuilder::new(app)
-                .item(&show)
+            let mut menu_builder = MenuBuilder::new(app)
+                .item(&open)
                 .separator()
                 .item(&health)
-                .separator()
-                .item(&quit)
-                .build()?;
+                .separator();
+            if updates_supported {
+                menu_builder = menu_builder.item(&update_item).item(&auto_update).separator();
+            }
+            let menu = menu_builder.item(&clipboard_toggle).item(&autostart).item(&quit).build()?;
 
+            let autostart_item = autostart.clone();
+            let auto_update_item = auto_update.clone();
+            let clipboard_item = clipboard_toggle.clone();
+            let tray_update_item = update_item.clone();
+            let tray_update_state = update_state.clone();
             let _tray = TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Orion")
+                .tooltip("Orion - starting")
                 .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
                 .on_menu_event(move |app, event| match event.id().as_ref() {
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            if window.is_visible().unwrap_or(false) {
-                                let _ = window.hide();
-                            } else {
-                                let _ = window.show();
-                                let _ = window.set_focus();
+                    "show" => show_main_window(app),
+                    "autostart" => {
+                        use tauri_plugin_autostart::ManagerExt;
+                        let manager = app.autolaunch();
+                        let _ = if manager.is_enabled().unwrap_or(false) {
+                            manager.disable()
+                        } else {
+                            manager.enable()
+                        };
+                        // Show the real state, whether or not the change worked.
+                        let _ = autostart_item.set_checked(manager.is_enabled().unwrap_or(false));
+                    }
+                    "update" => {
+                        // Install a known update, or check now and say what was found.
+                        let app = app.clone();
+                        let state = tray_update_state.clone();
+                        let item = tray_update_item.clone();
+                        tauri::async_runtime::spawn(async move {
+                            use tauri_plugin_notification::NotificationExt;
+                            if app_update::cached(&app, &state).await.is_some() {
+                                let _ = item.set_text("Updating...");
+                                if let Err(e) = app_update::install(&app, &state).await {
+                                    let _ = item.set_text("Update now");
+                                    let _ = app.notification().builder().title("Orion could not update").body(e).show();
+                                }
+                                return;
+                            }
+                            match app_update::check_now(&app, &state).await {
+                                Ok(Some(update)) => {
+                                    let _ = item.set_text(format!("Update now to Orion {}", update.version));
+                                    app_update::announce(&app, &state, &update).await;
+                                }
+                                Ok(None) => {
+                                    let _ = app.notification().builder().title("Orion is up to date")
+                                        .body(format!("You have the latest version ({}).", app.package_info().version)).show();
+                                }
+                                Err(e) => {
+                                    let _ = app.notification().builder().title("Could not check for updates").body(e).show();
+                                }
+                            }
+                        });
+                    }
+                    "clipboard_panel" => {
+                        let enabled = !app_update::bool_setting(CLIPBOARD_PANEL_SETTING, false);
+                        app_update::set_bool_setting(CLIPBOARD_PANEL_SETTING, enabled);
+                        let _ = clipboard_item.set_checked(enabled);
+                        if !enabled {
+                            if let Some(win) = app.get_webview_window(CLIPBOARD_PANEL_LABEL) {
+                                let _ = win.hide();
                             }
                         }
+                    }
+                    "auto_update" => {
+                        let enabled = !app_update::auto_check_enabled();
+                        app_update::set_auto_check(enabled);
+                        let _ = auto_update_item.set_checked(enabled);
                     }
                     "quit" => {
                         app.exit(0);
@@ -1649,6 +2291,54 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+
+            // Look for updates in the background (installer builds only).
+            if updates_supported {
+                let app_handle = app.handle().clone();
+                let state = update_state.clone();
+                let item = update_item.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(app_update::FIRST_CHECK_DELAY).await;
+                    loop {
+                        if app_update::auto_check_enabled() {
+                            if let Ok(Some(update)) = app_update::check_now(&app_handle, &state).await {
+                                let _ = item.set_text(format!("Update now to Orion {}", update.version));
+                                app_update::announce(&app_handle, &state, &update).await;
+                            }
+                        }
+                        tokio::time::sleep(app_update::CHECK_INTERVAL).await;
+                    }
+                });
+            }
+
+            // Keep the tray's status line and tooltip current.
+            {
+                let health_item = health.clone();
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut last = String::new();
+                    loop {
+                        let text = {
+                            let s = tray_status_ref.lock().await;
+                            tray_status_text(&s)
+                        };
+                        if text != last {
+                            let _ = health_item.set_text(&text);
+                            if let Some(tray) = handle.tray_by_id("main") {
+                                let _ = tray.set_tooltip(Some(format!("Orion - {}", text)));
+                            }
+                            last = text;
+                        }
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                });
+            }
+
+            // Started at login with --hidden: stay in the tray. Otherwise show
+            // the window (it starts hidden so a login start never flashes it).
+            if !std::env::args().any(|a| a == "--hidden") {
+                show_main_window(app.handle());
+            }
 
             // Create native macOS overlay panel
             #[cfg(target_os = "macos")]
@@ -1676,6 +2366,12 @@ pub fn run() {
 
             // Auto-start backend services on launch
             tauri::async_runtime::spawn(boot_backend(boot_backend_ref, boot_status_ref));
+
+            // Clipboard Intelligence — watch for copied text and pop the panel
+            tauri::async_runtime::spawn(run_clipboard_watcher(
+                app.handle().clone(),
+                clipboard_watch_ref,
+            ));
 
             Ok(())
         })
@@ -1706,14 +2402,23 @@ pub fn run() {
             get_cloud_key_status,
             toggle_overlay,
             hide_overlay,
+            app_update_supported,
+            get_app_update,
+            check_app_update,
+            install_app_update,
             get_overlay_conversation,
+            get_pending_clipboard_text,
+            mark_clipboard_seen,
+            close_clipboard_panel,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building Orion Desktop")
         .run(move |_app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                // Wait for the servers to stop: spawning this and returning let
+                // the process exit first, leaving the backend running.
                 let b = backend.clone();
-                tauri::async_runtime::spawn(async move {
+                tauri::async_runtime::block_on(async move {
                     b.lock().await.stop_all().await;
                 });
             }

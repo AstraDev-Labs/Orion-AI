@@ -78,7 +78,22 @@ def channel():
     return _MockChannel()
 
 
+@pytest.fixture
+def approvals(tmp_path, monkeypatch):
+    from orion.channels import live
+    from orion.tools import proactive_tools
+    from orion.tools.approval_store import ApprovalStore
+
+    store = ApprovalStore(str(tmp_path / "approvals.db"))
+    monkeypatch.setattr(proactive_tools, "_store", store)
+    live.clear_live_channels()
+    yield store
+    live.clear_live_channels()
+
+
 class TestChannelSendTool:
+    """channel_send drafts; nothing is sent until the user approves."""
+
     def test_spec(self):
         tool = ChannelSendTool()
         assert tool.spec.name == "channel_send"
@@ -86,52 +101,46 @@ class TestChannelSendTool:
         assert "channel" in tool.spec.parameters["required"]
         assert "content" in tool.spec.parameters["required"]
 
-    def test_send_success(self, channel):
+    def test_send_is_queued_not_sent(self, channel, approvals):
         tool = ChannelSendTool(channel)
-        result = tool.execute(channel="chat-123", content="Hello!")
+        result = tool.execute(channel="919876543210", content="Hello!", platform="whatsapp")
         assert result.success is True
-        assert "chat-123" in result.content
-        assert len(channel._sent) == 1
-        assert channel._sent[0]["content"] == "Hello!"
+        assert "Nothing sent yet" in result.content
+        assert channel._sent == []
+        pending = approvals.list_pending()
+        assert len(pending) == 1
+        assert pending[0].action_type == "channel_send"
+        assert pending[0].payload == {"platform": "whatsapp", "target": "919876543210", "content": "Hello!"}
 
-    def test_send_with_conversation_id(self, channel):
-        tool = ChannelSendTool(channel)
-        result = tool.execute(
-            channel="chat-123",
-            content="Reply",
-            conversation_id="conv-1",
-        )
-        assert result.success is True
-        assert channel._sent[0]["conversation_id"] == "conv-1"
+    def test_platform_defaults_to_connected_channel(self, approvals):
+        from orion.channels import live
 
-    def test_no_backend(self):
-        tool = ChannelSendTool()
-        result = tool.execute(channel="chat-123", content="Hello!")
-        assert result.success is False
-        assert "No channel backend" in result.content
+        live.register_live_channel("telegram", _MockChannel())
+        ChannelSendTool().execute(channel="chat-123", content="Hi")
+        assert approvals.list_pending()[0].payload["platform"] == "telegram"
 
-    def test_missing_params(self, channel):
+    def test_approved_draft_is_sent_on_live_channel(self, approvals):
+        from orion.channels import live
+        from orion.tools.proactive_tools import ExecutePendingActionsTool, parse_approval_response
+
+        mock = _MockChannel()
+        live.register_live_channel("telegram", mock)
+        ChannelSendTool().execute(channel="chat-123", content="Hi there", platform="telegram")
+        assert parse_approval_response("yes, send it", store=approvals)[0]["approved"]
+        ExecutePendingActionsTool(store=approvals).execute()
+        assert mock._sent and mock._sent[0]["content"] == "Hi there"
+
+    def test_missing_params(self, channel, approvals):
         tool = ChannelSendTool(channel)
         result = tool.execute()
         assert result.success is False
         assert "required" in result.content
 
-    def test_missing_content(self, channel):
+    def test_missing_content(self, channel, approvals):
         tool = ChannelSendTool(channel)
         result = tool.execute(channel="chat-123")
         assert result.success is False
-
-    def test_send_failure(self):
-        tool = ChannelSendTool(_FailingChannel())
-        result = tool.execute(channel="chat-123", content="Hello!")
-        assert result.success is False
-        assert "Failed" in result.content
-
-    def test_error_handling(self):
-        tool = ChannelSendTool(_ErrorChannel())
-        result = tool.execute(channel="chat-123", content="Hello!")
-        assert result.success is False
-        assert "Send error" in result.content
+        assert approvals.list_pending() == []
 
     def test_tool_id(self):
         assert ChannelSendTool.tool_id == "channel_send"
@@ -150,11 +159,10 @@ class TestChannelListTool:
         assert "mock-channel-1" in result.content
         assert "mock-channel-2" in result.content
 
-    def test_no_backend(self):
+    def test_no_backend(self, approvals):
         tool = ChannelListTool()
         result = tool.execute()
-        assert result.success is False
-        assert "No channel backend" in result.content
+        assert "No messaging app is connected" in result.content
 
     def test_error_handling(self):
         tool = ChannelListTool(_ErrorChannel())
@@ -178,11 +186,10 @@ class TestChannelStatusTool:
         assert result.success is True
         assert "connected" in result.content
 
-    def test_no_backend(self):
+    def test_no_backend(self, approvals):
         tool = ChannelStatusTool()
         result = tool.execute()
-        assert result.success is False
-        assert "No channel backend" in result.content
+        assert "No messaging app is connected" in result.content
 
     def test_error_handling(self):
         tool = ChannelStatusTool(_ErrorChannel())

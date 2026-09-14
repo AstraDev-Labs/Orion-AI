@@ -6,6 +6,26 @@ from typing import Any
 
 __all__ = ["SECURITY_HEADERS", "create_security_middleware"]
 
+# The original policy was just "default-src 'self' 'unsafe-inline'
+# 'unsafe-eval'" -- correct for scripts/styles, but with no font-src or
+# worker-src it falls back to default-src for both, which lacks `data:`.
+# That broke two real things once the frontend was served as a proper
+# production PWA build: an embedded data:-URI web font failed CSP and got
+# blocked, and the service worker registration failed outright. img-src
+# needs data:/blob: for the same reason (data-URI icons, blob-based
+# screenshots/exports elsewhere in the app). connect-src explicitly lists
+# local HTTP/WS ports since the frontend talks to the backend and Ollama
+# on several of them.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "font-src 'self' data:; "
+    "img-src 'self' data: blob:; "
+    "worker-src 'self'; "
+    "connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*"
+)
+
 
 def create_security_middleware() -> Any:
     """Create a FastAPI middleware that adds security headers.
@@ -48,9 +68,7 @@ def create_security_middleware() -> Any:
             response.headers["Permissions-Policy"] = (
                 "camera=(), microphone=(), geolocation=()"
             )
-            response.headers["Content-Security-Policy"] = (
-                "default-src 'self' 'unsafe-inline' 'unsafe-eval'"
-            )
+            response.headers["Content-Security-Policy"] = _CSP
             return response
 
     return SecurityHeadersMiddleware
@@ -64,5 +82,5 @@ SECURITY_HEADERS = {
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-    "Content-Security-Policy": "default-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    "Content-Security-Policy": _CSP,
 }

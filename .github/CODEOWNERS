@@ -9,8 +9,8 @@
 # See: https://docs.github.com/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
 #
 # To add more owners, append GitHub handles (`@username`) or team slugs
-# (`@open-jarvis/<team>`) to the line below. To gate specific paths
+# (`@AstraDev-Labs/<team>`) to the line below. To gate specific paths
 # differently, add a more-specific pattern beneath it (later, more
 # specific rules win).
 
-* @jonsaadfalcon @ANarayan @robbym-dev
+* @TharunG2006

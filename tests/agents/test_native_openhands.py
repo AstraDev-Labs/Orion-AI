@@ -270,7 +270,7 @@ class TestNativeOpenHandsAgent:
         assert result.turns == 2
         assert len(result.tool_results) == 1
         assert result.tool_results[0].success is False
-        assert "Unknown tool" in result.tool_results[0].content
+        assert "No tool named" in result.tool_results[0].content
 
     def test_no_bus_works(self):
         """Agent runs correctly without an event bus."""

@@ -125,7 +125,7 @@ class TestToolExecutor:
         call = ToolCall(id="1", name="nonexistent", arguments="{}")
         result = executor.execute(call)
         assert result.success is False
-        assert "Unknown tool" in result.content
+        assert "No tool named" in result.content
 
     def test_execute_invalid_json(self):
         executor = ToolExecutor([_EchoTool()])

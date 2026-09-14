@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from orion.channels._stubs import ChannelMessage
 from orion.core.config import OrionConfig
 from orion.core.events import EventBus
@@ -56,6 +58,49 @@ def _fire(channel_mock, cm: ChannelMessage) -> None:
         handler[0][0](cm)
 
 
+@pytest.fixture(autouse=True)
+def _deterministic_away(monkeypatch):
+    """Pin the away gate instead of reading real OS idle time.
+
+    wire_channel() skips auto-reply unless is_user_away() is true, and that
+    reads the OS idle timer -- so these tests otherwise passed or failed
+    depending on whether the developer had touched the keyboard in the last
+    ten minutes. These cases exercise the routing and session logic downstream
+    of the gate; none of them assert the closed-gate behaviour.
+    """
+    monkeypatch.setattr("orion.core.activity.is_user_away", lambda *a, **k: True)
+
+
+def _make_channel_mock() -> MagicMock:
+    """A channel mock that does not accidentally veto its own replies.
+
+    A bare MagicMock auto-creates every attribute, so
+    `getattr(bridge, "owner_replied_since")` returned a truthy mock whose call
+    result was also truthy -- wire_channel then logged "Owner already replied"
+    and never called send(). Real channels either omit the hook or return False.
+    """
+    ch = MagicMock()
+    ch.owner_replied_since = MagicMock(return_value=False)
+    return ch
+
+
+def _wait_for_send(mock_channel, timeout: float = 5.0) -> None:
+    """Block until the channel reply has actually been dispatched.
+
+    wire_channel() hands replies to a ThreadPoolExecutor
+    (see system/core.py's _reply_pool), so the handler returns before
+    channel_bridge.send() runs. Asserting immediately after handler(cm) is a
+    race that happens to pass only when the worker wins.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if mock_channel.send.call_count:
+            return
+        time.sleep(0.01)
+
+
 # ---------------------------------------------------------------------------
 # Tests via OrionSystem.wire_channel()
 # ---------------------------------------------------------------------------
@@ -69,13 +114,15 @@ class TestWireChannelWithAgent:
         # Patch ask() so we don't need a real engine/agent
         system.ask = MagicMock(return_value={"content": "pong"})
 
-        mock_channel = MagicMock()
+        mock_channel = _make_channel_mock()
         system.wire_channel(mock_channel)
 
         # Simulate an incoming message
         cm = _make_channel_message(content="ping")
         handler = mock_channel.on_message.call_args[0][0]
         handler(cm)
+
+        _wait_for_send(mock_channel)
 
         system.ask.assert_called_once()
         assert system.ask.call_args[0][0] == "ping"
@@ -89,7 +136,7 @@ class TestWireChannelWithAgent:
         system = _make_system(tmp_path=tmp_path)
         assert system.session_store is None
 
-        mock_channel = MagicMock()
+        mock_channel = _make_channel_mock()
         system.ask = MagicMock(return_value={"content": "ok"})
         system.wire_channel(mock_channel)
 
@@ -104,7 +151,7 @@ class TestWireChannelWithAgent:
         system.session_store = existing_store
         system.ask = MagicMock(return_value={"content": "ok"})
 
-        mock_channel = MagicMock()
+        mock_channel = _make_channel_mock()
         system.wire_channel(mock_channel)
 
         handler = mock_channel.on_message.call_args[0][0]
@@ -120,12 +167,13 @@ class TestWireChannelWithEngine:
         system = _make_system(agent_name="", tmp_path=tmp_path)
         system.ask = MagicMock(return_value={"content": "raw reply"})
 
-        mock_channel = MagicMock()
+        mock_channel = _make_channel_mock()
         system.wire_channel(mock_channel)
 
         handler = mock_channel.on_message.call_args[0][0]
         handler(_make_channel_message(content="hi"))
 
+        _wait_for_send(mock_channel)
         mock_channel.send.assert_called_once_with(
             "telegram",
             "raw reply",
@@ -143,7 +191,7 @@ class TestWireChannelSessionIsolation:
             side_effect=lambda q, **kw: {"content": replies.get(q, "")}
         )
 
-        mock_channel = MagicMock()
+        mock_channel = _make_channel_mock()
         system.wire_channel(mock_channel)
         handler = mock_channel.on_message.call_args[0][0]
 
@@ -163,7 +211,7 @@ class TestWireChannelSessionIsolation:
         system = _make_system(tmp_path=tmp_path)
         system.ask = MagicMock(return_value={"content": "reply"})
 
-        mock_channel = MagicMock()
+        mock_channel = _make_channel_mock()
         system.wire_channel(mock_channel)
         handler = mock_channel.on_message.call_args[0][0]
 
@@ -180,18 +228,26 @@ class TestWireChannelSessionIsolation:
 class TestWireChannelErrorHandling:
     """Handler sends a user-visible error message when ask() raises."""
 
-    def test_error_reply_sent(self, tmp_path):
+    def test_generation_error_stays_silent(self, tmp_path):
+        """A failed generation must not send anything to the contact.
+
+        This used to assert that an error message was replied. wire_channel now
+        deliberately swallows it -- see system/core.py: "stay silent rather than
+        send an error to a contact" -- because the recipient is a third party
+        who should never receive Orion's internal failures. The handler must
+        still not raise.
+        """
         system = _make_system(tmp_path=tmp_path)
         system.ask = MagicMock(side_effect=RuntimeError("boom"))
 
-        mock_channel = MagicMock()
+        mock_channel = _make_channel_mock()
         system.wire_channel(mock_channel)
         handler = mock_channel.on_message.call_args[0][0]
         handler(_make_channel_message())
 
-        mock_channel.send.assert_called_once()
-        sent_content = mock_channel.send.call_args[0][1]
-        assert "error" in sent_content.lower()
+        # Give the reply pool a chance to run before asserting nothing was sent.
+        _wait_for_send(mock_channel, timeout=1.0)
+        mock_channel.send.assert_not_called()
 
 
 class TestChannelToolLoading:

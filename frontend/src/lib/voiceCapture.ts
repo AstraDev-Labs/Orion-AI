@@ -5,6 +5,16 @@ export type VoiceCaptureOptions = {
   speechThreshold?: number;
 };
 
+/** Mic settings for speech recognition: the browser's own echo cancellation,
+ * noise suppression and auto-gain, mono. Without them a quiet or distant voice
+ * reached Whisper under room noise ("can you hear me" came back as "feel"). */
+export const SPEECH_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+};
+
 export type VoiceCaptureHandle = {
   stop: () => void;
   cancel: () => void;
@@ -30,7 +40,9 @@ export async function recordUntilSilence(
   let speechMs = 0;
   let silentMs = 0;
 
-  const recorder = new MediaRecorder(stream, { mimeType });
+  // Opus at the browser default (~32 kbps) audibly smears consonants; speech
+  // recognition is noticeably better at 96 kbps and the clips are tiny anyway.
+  const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 96000 });
   const audioContext = new AudioContext();
   const source = audioContext.createMediaStreamSource(stream);
   const analyser = audioContext.createAnalyser();
@@ -51,8 +63,14 @@ export async function recordUntilSilence(
   recorder.onstop = () => {
     cleanup();
     if (cancelled) return;
+    // A recording that never contained speech (the 20 s cap hit in a quiet
+    // room) is not sent: Whisper invents words from pure noise.
+    if (speechMs < minSpeechMs) {
+      onComplete(new Blob([], { type: mimeType }));
+      return;
+    }
     const blob = new Blob(chunks, { type: mimeType });
-    if (blob.size > 0) onComplete(blob);
+    onComplete(blob);
   };
 
   const getRms = (): number => {

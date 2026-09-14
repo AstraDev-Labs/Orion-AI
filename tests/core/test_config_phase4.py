@@ -6,8 +6,8 @@ from pathlib import Path
 
 from orion.core.config import (
     HardwareInfo,
-    OrionConfig,
     LearningConfig,
+    OrionConfig,
     generate_default_toml,
     load_config,
 )

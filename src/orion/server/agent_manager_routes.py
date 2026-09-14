@@ -1725,6 +1725,10 @@ def create_agent_manager_router(
 
     @agents_router.post("/{agent_id}/messages")
     async def send_message(agent_id: str, req: SendMessageRequest, request: Request):
+        idle_scheduler = getattr(request.app.state, "idle_learning_scheduler", None)
+        if idle_scheduler is not None:
+            idle_scheduler.touch()
+
         agent_record = manager.get_agent(agent_id)
         if not agent_record:
             raise HTTPException(status_code=404, detail="Agent not found")

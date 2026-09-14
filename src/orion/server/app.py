@@ -17,6 +17,7 @@ from orion.server.config_routes import router as config_router
 from orion.server.connectors_router import create_connectors_router
 from orion.server.dashboard import dashboard_router
 from orion.server.digest_routes import create_digest_router
+from orion.server.hud_routes import router as hud_router
 from orion.server.research_router import router as research_router
 from orion.server.routes import router
 from orion.server.upload_router import router as upload_router
@@ -153,6 +154,7 @@ def create_app(
     config=None,
     memory_backend=None,
     speech_backend=None,
+    tts_backend=None,
     agent_manager=None,
     agent_scheduler=None,
     api_key: str = "",
@@ -210,6 +212,7 @@ def create_app(
 
     # Store dependencies in app state
     app.state.engine = engine
+    app.state.api_key = api_key
     app.state.model = model
     app.state.agent = agent
     app.state.bus = bus
@@ -221,6 +224,7 @@ def create_app(
     app.state.config = config
     app.state.memory_backend = memory_backend
     app.state.speech_backend = speech_backend
+    app.state.tts_backend = tts_backend
     app.state.agent_manager = agent_manager
     app.state.agent_scheduler = agent_scheduler
     app.state.session_start = time.time()
@@ -240,6 +244,39 @@ def create_app(
                 _trace_store.subscribe_to_bus(_bus)
     except Exception:
         pass  # traces are optional; don't block server startup
+
+    # Wire up idle-triggered background learning (config.learning.training_enabled).
+    # Runs LearningOrchestrator only after sustained user inactivity, in a worker
+    # thread so it never blocks live chat requests; any chat/agent-message
+    # request resets the idle clock via app.state.idle_learning_scheduler.touch().
+    app.state.idle_learning_scheduler = None
+    try:
+        from orion.core.config import load_config as _load_cfg
+        from orion.learning.idle_scheduler import IdleLearningScheduler
+        from orion.system.builder import SystemBuilder
+
+        _learn_cfg = config if config is not None else _load_cfg()
+        if _learn_cfg.learning.training_enabled:
+            orchestrator = SystemBuilder._setup_learning_orchestrator(_learn_cfg)
+            if orchestrator is not None:
+                scheduler = IdleLearningScheduler(
+                    orchestrator,
+                    minimum_idle_seconds=300.0,
+                    min_seconds_between_runs=3600.0,
+                )
+                app.state.idle_learning_scheduler = scheduler
+
+                @app.on_event("startup")
+                async def _start_idle_learning() -> None:
+                    app.state.idle_learning_scheduler.start()
+
+                @app.on_event("shutdown")
+                async def _stop_idle_learning() -> None:
+                    sched = getattr(app.state, "idle_learning_scheduler", None)
+                    if sched is not None:
+                        sched.stop()
+    except Exception as exc:
+        logger.warning("Idle learning scheduler init skipped: %s", exc)
 
     # Wire up external analytics if enabled (PostHog) — never block startup.
     # Note: we do NOT fire app_opened here. The frontend owns that event
@@ -292,6 +329,11 @@ def create_app(
     app.include_router(upload_router)
     app.include_router(research_router)
     app.include_router(analytics_router)
+    app.include_router(hud_router)
+
+    from orion.server.connections import router as connections_router
+
+    app.include_router(connections_router)
     include_all_routes(app)
 
     # Restore SendBlue channel bindings from database on startup
@@ -354,7 +396,21 @@ def create_app(
                 # Path traversal prevention
                 resolved_root = static_dir.resolve()
                 if candidate.is_relative_to(resolved_root) and candidate.is_file():
-                    return FileResponse(candidate, headers=_NO_CACHE_HEADERS)
+                    # The service worker script specifically must not be
+                    # served with Cache-Control: no-store -- Chrome's SW
+                    # registration fetch relies on its own HTTP cache layer
+                    # even for a first-time registration, and no-store
+                    # breaks that, failing registration with an opaque
+                    # "unknown error occurred when fetching the script"
+                    # (observed here). no-cache still forces revalidation
+                    # on every load, so this doesn't reintroduce stale-SW
+                    # risk -- it just stops breaking registration outright.
+                    headers = (
+                        {"Cache-Control": "no-cache"}
+                        if candidate.name == "sw.js"
+                        else _NO_CACHE_HEADERS
+                    )
+                    return FileResponse(candidate, headers=headers)
             return FileResponse(
                 static_dir / "index.html",
                 headers=_NO_CACHE_HEADERS,

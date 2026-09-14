@@ -11,26 +11,28 @@ Requires the ``colbert-ai`` and ``torch`` packages::
 
 from __future__ import annotations
 
+import importlib.util as _importlib_util
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    import torch  # noqa: F401
-except ImportError as exc:
-    raise ImportError(
-        "PyTorch is required for the ColBERT memory backend. "
-        "Install it with:\n\n"
-        "    pip install torch\n"
-    ) from exc
-
-try:
-    from colbert.modeling.checkpoint import Checkpoint  # noqa: F401
-except ImportError as exc:
+# Availability checks only -- nothing is imported here. Both torch and colbert
+# are imported lazily inside the methods that use them. These guards used to
+# `import torch` for real, which cost ~1.9 s on every server start: storage's
+# __init__ imports this module to register the backend, torch loaded, and then
+# the colbert-ai check below failed anyway on any machine without it -- so the
+# whole 1.2 GB torch import was paid purely to be discarded.
+if _importlib_util.find_spec("colbert") is None:
     raise ImportError(
         "The 'colbert-ai' package is required for the ColBERT "
         "memory backend. Install it with:\n\n"
         "    pip install colbert-ai\n"
-    ) from exc
+    )
+if _importlib_util.find_spec("torch") is None:
+    raise ImportError(
+        "PyTorch is required for the ColBERT memory backend. "
+        "Install it with:\n\n"
+        "    pip install torch\n"
+    )
 
 from orion.core.events import EventType, get_event_bus
 from orion.core.registry import MemoryRegistry

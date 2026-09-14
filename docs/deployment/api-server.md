@@ -7,7 +7,7 @@ Orion includes an OpenAI-compatible API server built on FastAPI and uvicorn. It 
 The server requires the `[server]` extra (FastAPI + uvicorn):
 
 ```bash
-git clone https://github.com/open-orion/Orion.git
+git clone https://github.com/AstraDev-Labs/Orion-AI.git
 cd Orion
 uv sync --extra server
 ```

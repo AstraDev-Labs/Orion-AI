@@ -6,7 +6,7 @@ to larger models.
 
 ## Requirements
 
-- Orion installed (`git clone https://github.com/open-orion/Orion.git && cd Orion && uv sync` or `uv sync --extra dev`)
+- Orion installed (`git clone https://github.com/AstraDev-Labs/Orion-AI.git && cd Orion-AI && uv sync` or `uv sync --extra dev`)
 - An inference engine running with multiple models available
 
 ## Usage

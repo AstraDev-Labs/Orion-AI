@@ -1,0 +1,45 @@
+---
+import { Image } from 'astro:assets';
+import logo from '../assets/orion-logo.png';
+import { FOOTER, REPO_URL, STAGE, VERSION, url } from '../lib/site';
+const year = new Date().getFullYear();
+---
+
+<footer class="mt-24 border-t border-[var(--color-line)] bg-[rgb(3_9_22/0.6)]">
+  <div class="container-site grid gap-10 py-14 md:grid-cols-[1.4fr_repeat(4,1fr)]">
+    <div>
+      <a href={url('/')} class="flex items-center gap-2.5">
+        <Image src={logo} alt="" width={32} height={32} class="h-8 w-8" />
+        <span class="display text-base font-bold tracking-[0.22em] text-white">ORION</span>
+      </a>
+      <p class="mt-4 max-w-xs text-sm leading-relaxed text-[var(--color-muted)]">
+        An AI assistant that runs on your own computer. Autonomous, persistent, self-developing.
+      </p>
+      <p class="mt-4 text-xs text-[var(--color-faint)]">
+        Version {VERSION} · {STAGE}. Expect bugs, and please <a class="underline hover:text-white" href={url('/contact')}>report them</a>.
+      </p>
+    </div>
+    {
+      FOOTER.map((col) => (
+        <div>
+          <h2 class="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--color-faint)]">{col.title}</h2>
+          <ul class="mt-4 space-y-2.5 text-sm">
+            {col.links.map((l) => (
+              <li>
+                <a href={url(l.href)} class="text-[var(--color-muted)] transition-colors hover:text-white">
+                  {l.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))
+    }
+  </div>
+  <div class="border-t border-[var(--color-line)]">
+    <div class="container-site flex flex-wrap items-center justify-between gap-3 py-5 text-xs text-[var(--color-faint)]">
+      <span>© {year} Orion AI · Built by Tharun · Open source under the Apache License 2.0</span>
+      <a href={REPO_URL} class="hover:text-white">GitHub</a>
+    </div>
+  </div>
+</footer>

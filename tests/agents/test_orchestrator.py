@@ -665,3 +665,201 @@ class TestOrchestratorParallelTools:
         )
         result = agent.run("What is 2+2?")
         assert result.content == "The answer is 4."
+
+
+def test_time_budget_stops_tool_use_and_answers(monkeypatch):
+    """Past the wall-clock budget the next turn gets no tools and must answer."""
+    import itertools
+
+    import orion.agents.orchestrator as orch
+
+    clock = itertools.count(start=0, step=100)  # every reading is 100 s later
+    monkeypatch.setattr(orch.time, "monotonic", lambda: next(clock))
+    engine = _make_engine_with_tool_call(final_content="Here is what I found.")
+    agent = OrchestratorAgent(engine=engine, model="test-model", tools=[_CalculatorStub()])
+    agent._time_budget_s = 60.0
+    result = agent.run("What is 2+2?")
+    assert result.content == "Here is what I found."
+    second_call = engine.generate.call_args_list[1]
+    assert "tools" not in second_call.kwargs
+    sent = second_call.args[0] if second_call.args else second_call.kwargs["messages"]
+    assert "Time limit reached" in sent[-1].content
+
+
+# ---------------------------------------------------------------------------
+# Streamed turns (on_delta)
+# ---------------------------------------------------------------------------
+
+
+def _streaming_engine(turns):
+    """A real InferenceEngine subclass whose stream_full replays `turns`.
+
+    Each turn is a list of StreamChunk. generate() must not be used.
+    """
+    from orion.engine._stubs import InferenceEngine
+
+    class _Engine(InferenceEngine):
+        engine_id = "fake-stream"
+
+        def __init__(self):
+            self.turns = list(turns)
+            self.seen_tools = []
+
+        def generate(self, messages, *, model, **kwargs):
+            raise AssertionError("streaming path should not call generate()")
+
+        async def stream(self, messages, *, model, **kwargs):
+            yield ""
+
+        async def stream_full(self, messages, *, model, **kwargs):
+            self.seen_tools.append(kwargs.get("tools"))
+            for chunk in self.turns.pop(0):
+                yield chunk
+
+        def list_models(self):
+            return ["m"]
+
+        def health(self):
+            return True
+
+    return _Engine()
+
+
+def test_on_delta_streams_the_final_answer_after_a_tool():
+    from orion.engine._stubs import StreamChunk
+
+    engine = _streaming_engine([
+        [StreamChunk(tool_calls=[{"index": 0, "id": "c1", "type": "function",
+                                  "function": {"name": "calculator", "arguments": '{"expression": "6*7"}'}}]),
+         StreamChunk(finish_reason="tool_calls", usage={"prompt_tokens": 10, "completion_tokens": 3})],
+        [StreamChunk(content="The answer "), StreamChunk(content="is 42."),
+         StreamChunk(finish_reason="stop", usage={"prompt_tokens": 12, "completion_tokens": 4})],
+    ])
+    agent = OrchestratorAgent(engine, "m", tools=[_CalculatorStub()], bus=EventBus(), max_turns=4)
+    deltas = []
+    result = agent.run("what is 6*7", on_delta=deltas.append)
+
+    assert deltas == ["The answer ", "is 42."]
+    assert result.content == "The answer is 42."
+    assert [r.content for r in result.tool_results] == ["42"]
+    assert result.metadata["prompt_tokens"] == 22
+    assert engine.seen_tools[0]  # tools were offered on the streamed turn
+
+
+def test_without_on_delta_the_agent_does_not_stream():
+    engine = MagicMock()
+    engine.engine_id = "mock"
+    engine.generate.return_value = {"content": "hi", "usage": {}}
+    agent = OrchestratorAgent(engine, "m", bus=EventBus())
+    assert agent.run("hello").content == "hi"
+    engine.stream_full.assert_not_called()
+
+
+def test_engine_that_drops_tools_when_streaming_is_not_streamed():
+    # The base InferenceEngine.stream_full wraps stream() and ignores tools:
+    # streaming through it would silently never call a tool.
+    from orion.agents.orchestrator import _streams_tool_calls
+    from orion.engine._stubs import InferenceEngine
+
+    class _TextOnly(InferenceEngine):
+        engine_id = "text-only"
+
+        def generate(self, messages, *, model, **kwargs):
+            return {"content": "plain", "usage": {}}
+
+        async def stream(self, messages, *, model, **kwargs):
+            yield "plain"
+
+        def list_models(self):
+            return []
+
+        def health(self):
+            return True
+
+    engine = _TextOnly()
+    assert _streams_tool_calls(engine, "m") is False
+    deltas = []
+    agent = OrchestratorAgent(engine, "m", tools=[_CalculatorStub()], bus=EventBus())
+    assert agent.run("hi", on_delta=deltas.append).content == "plain"
+    assert deltas == []
+
+
+def test_streams_tool_calls_follows_wrappers():
+    from orion.agents.orchestrator import _streams_tool_calls
+    from orion.telemetry.instrumented_engine import InstrumentedEngine
+
+    inner = _streaming_engine([])
+    wrapped = InstrumentedEngine(inner, EventBus())
+    assert _streams_tool_calls(wrapped, "m") is True
+
+
+class _AwayStub(BaseTool):
+    tool_id = "away_mode"
+
+    def __init__(self):
+        self.calls = []
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(name="away_mode", description="Mark the user as away or back.",
+                        parameters={"type": "object", "properties": {"action": {"type": "string"}}})
+
+    def execute(self, **params) -> ToolResult:
+        self.calls.append(params)
+        return ToolResult(tool_name="away_mode", content="away", success=True)
+
+
+def test_unoffered_state_changing_tool_is_not_run():
+    # Asked about maths, a small model also called away_mode, which it only
+    # knew from the system prompt. That starts auto-replies to contacts.
+    away = _AwayStub()
+    tools = [_CalculatorStub(), away]
+    engine = MagicMock()
+    engine.engine_id = "mock"
+    engine.generate.side_effect = [
+        {"content": "", "tool_calls": [{"id": "a", "name": "away_mode", "arguments": '{"action": "away"}'},
+                                        {"id": "b", "name": "calculator", "arguments": '{"expression": "2+2"}'}],
+         "usage": {}},
+        {"content": "4", "usage": {}},
+    ]
+    agent = OrchestratorAgent(engine, "m", tools=tools, bus=EventBus(), max_tools_per_request=1, parallel_tools=False)
+    result = agent.run("calculate 2+2")
+    assert away.calls == []
+    refused = next(r for r in result.tool_results if r.tool_name == "away_mode")
+    assert refused.success is False and "did not ask" in refused.content
+    assert any(r.tool_name == "calculator" and r.content == "4" for r in result.tool_results)
+
+
+def test_offered_state_changing_tool_runs():
+    away = _AwayStub()
+    engine = MagicMock()
+    engine.engine_id = "mock"
+    engine.generate.side_effect = [
+        {"content": "", "tool_calls": [{"id": "a", "name": "away_mode", "arguments": '{"action": "away"}'}], "usage": {}},
+        {"content": "Okay, you're away.", "usage": {}},
+    ]
+    agent = OrchestratorAgent(engine, "m", tools=[_CalculatorStub(), away], bus=EventBus(), max_tools_per_request=1)
+    agent.run("I'm stepping out, mark me away")
+    assert away.calls == [{"action": "away"}]
+
+
+def test_blocked_repeat_calls_end_in_an_answer_not_max_turns():
+    # A model retrying a blocked call used to burn every turn and reply
+    # "Maximum turns reached without a final answer."
+    engine = MagicMock()
+    engine.engine_id = "mock"
+    same_call = {"content": "", "tool_calls": [{"id": "c", "name": "calculator", "arguments": '{"expression": "1+1"}'}], "usage": {}}
+    seen_tools = []
+
+    def generate(messages, **kwargs):
+        seen_tools.append(bool(kwargs.get("tools")))
+        if kwargs.get("tools"):
+            return dict(same_call)
+        return {"content": "It is 2.", "usage": {}}
+
+    engine.generate.side_effect = generate
+    agent = OrchestratorAgent(engine, "m", tools=[_CalculatorStub()], bus=EventBus(), max_turns=8)
+    result = agent.run("what is 1+1")
+    assert result.content == "It is 2."
+    assert seen_tools[-1] is False
+    assert len(seen_tools) < 8

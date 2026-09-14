@@ -9,13 +9,16 @@ Provides:
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
+from orion.connectors.oauth_clients import GOOGLE_ONE_CLICK_SCOPES, google_client
 from orion.core.config import DEFAULT_CONFIG_DIR
 
 # ---------------------------------------------------------------------------
@@ -49,6 +52,11 @@ class OAuthProvider:
     connector_ids: Tuple[str, ...] = ()
     # Filenames in ~/.orion/connectors/ to save tokens to
     credential_files: Tuple[str, ...] = ()
+    # PKCE (RFC 7636). Required for the shipped public client, harmless otherwise.
+    pkce: bool = False
+    # Scopes requested when signing in with the client that ships with Orion
+    # (see oauth_clients.py); empty = this provider has no shipped client.
+    one_click_scopes: Tuple[str, ...] = ()
 
 
 # Combined scopes for all Google connectors so a single OAuth consent
@@ -92,6 +100,8 @@ OAUTH_PROVIDERS: Dict[str, OAuthProvider] = {
             "gmail.json",
             "google_tasks.json",
         ),
+        pkce=True,
+        one_click_scopes=GOOGLE_ONE_CLICK_SCOPES,
     ),
     "strava": OAuthProvider(
         name="strava",
@@ -120,6 +130,24 @@ OAUTH_PROVIDERS: Dict[str, OAuthProvider] = {
 }
 
 
+# Credential files that are only valid when a scope containing this text was
+# granted. Files not listed are covered by any sign-in for their provider.
+_SCOPE_FOR_FILE: Dict[str, str] = {
+    "gdrive.json": "auth/drive",
+    "gmail.json": "auth/gmail",
+    "gcalendar.json": "auth/calendar",
+    "gcontacts.json": "auth/contacts",
+    "google_tasks.json": "auth/tasks",
+}
+
+
+def shipped_client(provider: OAuthProvider) -> Tuple[str, str]:
+    """The OAuth client that ships with Orion for *provider*, or ("", "")."""
+    if provider.name == "google" and provider.one_click_scopes:
+        return google_client()
+    return "", ""
+
+
 def get_provider_for_connector(connector_id: str) -> Optional[OAuthProvider]:
     """Return the OAuthProvider that covers *connector_id*, or ``None``."""
     for provider in OAUTH_PROVIDERS.values():
@@ -146,7 +174,9 @@ def get_client_credentials(
     for filename in provider.credential_files:
         path = _CONNECTORS_DIR / filename
         tokens = load_tokens(str(path))
-        if tokens and tokens.get("client_id") and tokens.get("client_secret"):
+        # A one-click sign-in stores the shipped client alongside its tokens
+        # (needed for refresh); that is not the user's own client.
+        if tokens and tokens.get("client_id") and tokens.get("client_secret") and not tokens.get("one_click"):
             return tokens["client_id"], tokens["client_secret"]
 
     # Check environment variables
@@ -542,10 +572,13 @@ def _wait_for_callback_code(
     port: int = 8789,
     path: str = "/callback",
     timeout: int = 120,
+    expected_state: Optional[str] = None,
 ) -> str:
     """Start a localhost HTTP server and wait for ``?code=`` on *path*.
 
-    Returns the authorization code received from the OAuth redirect.
+    Returns the authorization code received from the OAuth redirect. With
+    *expected_state*, a redirect carrying any other ``state`` is ignored, so
+    another page cannot slip its own authorization code into this sign-in.
     """
     from http.server import BaseHTTPRequestHandler, HTTPServer
     from urllib.parse import parse_qs, urlparse
@@ -556,6 +589,10 @@ def _wait_for_callback_code(
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             params = parse_qs(urlparse(self.path).query)
+            if expected_state is not None and params.get("state", [""])[0] != expected_state:
+                self.send_response(400)
+                self.end_headers()
+                return
             if "code" in params:
                 auth_code.append(params["code"][0])
                 self.send_response(200)
@@ -603,11 +640,19 @@ def _wait_for_callback_code(
     time.sleep(0.3)
 
     server = HTTPServer((host, port), _Handler)
-    server.timeout = timeout
-
-    while not auth_code and not error:
-        server.handle_request()
-    server.server_close()
+    # handle_request() returns after `server.timeout` even when nothing
+    # arrived; without a deadline this loop waited forever for a sign-in the
+    # user had abandoned, holding the port.
+    deadline = time.monotonic() + timeout
+    try:
+        while not auth_code and not error:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            server.timeout = min(remaining, 1.0)
+            server.handle_request()
+    finally:
+        server.server_close()
 
     if error:
         raise RuntimeError(f"OAuth authorization denied: {error[0]}")
@@ -622,6 +667,7 @@ def _exchange_token(
     client_id: str,
     client_secret: str,
     redirect_uri: str,
+    code_verifier: str = "",
 ) -> Dict[str, Any]:
     """Exchange an authorization *code* for tokens using *provider* config."""
     import httpx
@@ -631,6 +677,8 @@ def _exchange_token(
         "redirect_uri": redirect_uri,
         "grant_type": "authorization_code",
     }
+    if code_verifier:
+        data["code_verifier"] = code_verifier
     headers: Dict[str, str] = {}
 
     if provider.token_auth == "basic":
@@ -667,11 +715,16 @@ def run_connector_oauth(
     if provider is None:
         raise ValueError(f"No OAuth provider configured for '{connector_id}'")
 
-    # Resolve credentials
+    # Resolve credentials: explicit args, then the user's own saved client,
+    # then environment, then the client that ships with Orion (one-click).
+    one_click = False
     if not (client_id and client_secret):
         creds = get_client_credentials(provider)
         if creds:
             client_id, client_secret = creds
+    if not (client_id and client_secret):
+        client_id, client_secret = shipped_client(provider)
+        one_click = bool(client_id and client_secret)
     if not (client_id and client_secret):
         raise RuntimeError(
             f"No client credentials for {provider.display_name}. "
@@ -683,14 +736,24 @@ def run_connector_oauth(
         f"{provider.callback_path}"
     )
 
-    # Build auth URL
+    # `state` ties the callback to this sign-in; PKCE ties the code to this
+    # process, which is what makes a shipped public client safe to use.
+    state = secrets.token_urlsafe(24)
+    scopes = provider.one_click_scopes if one_click else provider.scopes
     params: Dict[str, str] = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": " ".join(provider.scopes),
+        "scope": " ".join(scopes),
+        "state": state,
         **provider.extra_auth_params,
     }
+    code_verifier = ""
+    if provider.pkce:
+        code_verifier = secrets.token_urlsafe(64)
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest())
+        params["code_challenge"] = challenge.decode().rstrip("=")
+        params["code_challenge_method"] = "S256"
     auth_url = f"{provider.auth_endpoint}?{urlencode(params)}"
 
     # Open browser and wait for callback
@@ -699,10 +762,13 @@ def run_connector_oauth(
         host=provider.callback_host,
         port=provider.callback_port,
         path=provider.callback_path,
+        expected_state=state,
     )
 
     # Exchange code for tokens
-    tokens = _exchange_token(provider, code, client_id, client_secret, redirect_uri)
+    tokens = _exchange_token(
+        provider, code, client_id, client_secret, redirect_uri, code_verifier=code_verifier
+    )
 
     # Build payload with client credentials included (needed for refresh)
     payload = {
@@ -712,10 +778,18 @@ def run_connector_oauth(
         "expires_in": tokens.get("expires_in", 3600),
         "client_id": client_id,
         "client_secret": client_secret,
+        "one_click": one_click,
+        "scopes": list(scopes),
     }
 
-    # Save to all credential files for this provider
+    # Save to the credential files this sign-in actually covers. A one-click
+    # Google sign-in has no Drive/Gmail scope; writing gdrive.json/gmail.json
+    # would make those connectors report "connected" and then fail every call.
+    granted = " ".join(scopes)
     for filename in provider.credential_files:
+        needs = _SCOPE_FOR_FILE.get(filename)
+        if needs and needs not in granted:
+            continue
         save_tokens(str(_CONNECTORS_DIR / filename), payload)
 
     return tokens

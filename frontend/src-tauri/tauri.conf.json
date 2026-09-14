@@ -20,11 +20,16 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": true,
-        "transparent": false
+        "transparent": false,
+        "visible": false,
+        "additionalBrowserArgs": "--disable-features=msWebOoUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; img-src 'self' data: blob:"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://cdn.jsdelivr.net https://storage.googleapis.com; media-src 'self' blob: data: mediastream:; img-src 'self' data: blob:",
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ]
     }
   },
   "bundle": {
@@ -59,14 +64,16 @@
   "plugins": {
     "updater": {
       "active": true,
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFFNzUzMzhEOEY2MjNEMDMKUldRRFBXS1BqVE4xSG8vK0lkUWN4WnZQYVIrbmc4RmpoOGlJWTBLTE15RlIya3JvQisvdUR3a0QK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRDRkNCNUUxMzk5REI0ODgKUldTSXRKMDU0Ylg4VFBPMi91cmFETTgxMGkvczVMdDdzTkJ4dkRHWURNRCtMcWMrWno4ZTZNRzAK",
       "endpoints": [
-        "https://github.com/open-orion/Orion/releases/download/desktop-latest/latest.json"
+        "https://github.com/AstraDev-Labs/Orion-AI/releases/download/desktop-latest/latest.json"
       ]
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["orion"]
+        "schemes": [
+          "orion"
+        ]
       }
     }
   }

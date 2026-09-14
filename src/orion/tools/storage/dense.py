@@ -26,6 +26,7 @@ import threading
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from orion.core.registry import MemoryRegistry
@@ -550,8 +551,17 @@ class DenseMemory(MemoryBackend):
     """
 
     backend_id = "dense"
+    # Lowest cosine score worth injecting as automatic chat context (see
+    # storage/context.py). Measured with nomic-embed-text on real chat memory:
+    # related exchanges scored 0.64-0.86, unrelated small talk 0.44-0.58.
+    # Only the automatic injection uses it; explicit memory searches do not.
+    context_score_floor = 0.6
 
-    def __init__(self, embedder: Optional[Embedder] = None) -> None:
+    def __init__(
+        self,
+        embedder: Optional[Embedder] = None,
+        db_path: Optional[Any] = None,
+    ) -> None:
         self._embedder: Optional[Embedder] = embedder
         # Shape (n_docs, dim), L2-normalized row-wise. None until first store.
         self._matrix = None
@@ -562,6 +572,171 @@ class DenseMemory(MemoryBackend):
         # id -> index; lets us delete in O(1) for lookups
         self._id_to_index: Dict[str, int] = {}
         self._lock = threading.Lock()
+
+        # Persistence is opt-in via db_path (the "no persistence" design
+        # note above was written for a static, re-indexed-at-startup docs
+        # corpus; a caller that passes db_path wants this index to survive
+        # a restart -- e.g. conversation memory captured over time, which
+        # would otherwise be silently wiped every time the backend restarts).
+        self._db_path = Path(db_path).expanduser() if db_path else None
+        if self._db_path is not None:
+            self._load()
+
+    def _meta_path(self) -> Path:
+        """Where this backend's JSON metadata actually lives.
+
+        Deliberately *not* ``db_path`` itself. serve.py hands whichever memory
+        backend is configured the same ``config.memory.db_path``, but the
+        backends disagree about what that file is: sqlite.py opens it as a
+        SQLite database, while this one wants JSON. With both pointed at
+        ``~/.orion/memory.db`` this index tried to JSON-parse a SQLite header
+        on every startup, failed, and silently began empty -- so "memory is
+        persistent" quietly stopped being true. Worse, the first _save() would
+        have written JSON straight over the keyword backend's database.
+
+        Sidecar files keyed off the same stem let either backend own the
+        configured path without the other ever touching it.
+        """
+        assert self._db_path is not None
+        if self._db_path.suffix.lower() == ".json":
+            return self._db_path
+        return self._db_path.with_suffix(".dense.json")
+
+    def _npz_path(self) -> Path:
+        return self._meta_path().with_suffix(".npz")
+
+    @staticmethod
+    def _read_meta(path: Path) -> Optional[Dict[str, Any]]:
+        """Parse a dense metadata file, or return None if it is not one.
+
+        Returns None rather than raising for the ordinary "this file belongs to
+        something else" cases -- a SQLite database, a half-written file -- so
+        callers can tell *not ours* apart from a genuine failure, and never
+        overwrite a foreign file on the strength of a failed parse.
+        """
+        import json
+
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError, ValueError):
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict) or "contents" not in data:
+            return None
+        return data
+
+    def _load(self) -> None:
+        """Restore a previously persisted index, if one exists."""
+        if self._db_path is None:
+            return
+
+        import numpy as np
+
+        meta_path = self._meta_path()
+
+        # One-time migration: older builds wrote this metadata straight to
+        # db_path. Adopt such a file only when it really is ours -- if db_path
+        # holds another backend's database, _read_meta returns None and it is
+        # left strictly alone.
+        if (
+            meta_path != self._db_path
+            and not meta_path.exists()
+            and self._db_path.exists()
+            and self._read_meta(self._db_path) is not None
+        ):
+            try:
+                legacy_npz = self._db_path.with_suffix(".npz")
+                if legacy_npz.exists():
+                    legacy_npz.replace(self._npz_path())
+                self._db_path.replace(meta_path)
+                logger.info("Migrated dense memory index to %s", meta_path)
+            except OSError as exc:
+                logger.warning("Could not migrate the dense memory index: %s", exc)
+
+        if not meta_path.exists():
+            return  # First run with persistence on -- expected, not an error.
+
+        meta = self._read_meta(meta_path)
+        if meta is None:
+            logger.warning(
+                "Dense memory index at %s is not readable as a dense index; starting "
+                "empty. The file has been left on disk untouched.",
+                meta_path,
+            )
+            return
+
+        try:
+            self._contents = meta.get("contents", [])
+            self._sources = meta.get("sources", [])
+            self._metadatas = meta.get("metadatas", [])
+            self._doc_ids = meta.get("doc_ids", [])
+            self._id_to_index = {d: i for i, d in enumerate(self._doc_ids)}
+
+            npz_path = self._npz_path()
+            if npz_path.exists() and self._contents:
+                self._matrix = np.load(npz_path)["matrix"]
+            logger.info(
+                "Restored %d documents from the dense memory index",
+                len(self._contents),
+            )
+        except Exception:
+            logger.warning(
+                "Failed to load the persisted dense memory index; starting empty",
+                exc_info=True,
+            )
+            self._matrix = None
+            self._contents, self._sources, self._metadatas, self._doc_ids = [], [], [], []
+            self._id_to_index = {}
+
+    def _save(self) -> None:
+        """Persist the current index to disk. No-op unless db_path was set."""
+        if self._db_path is None:
+            return
+        try:
+            import json
+
+            import numpy as np
+
+            meta_path = self._meta_path()
+            meta_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Never write over a file that is not ours -- this is exactly what
+            # would have destroyed the SQLite keyword index back when both
+            # backends shared config.memory.db_path.
+            if meta_path.exists() and self._read_meta(meta_path) is None:
+                logger.error(
+                    "Refusing to overwrite %s: it is not a dense memory index. "
+                    "Nothing was persisted.",
+                    meta_path,
+                )
+                return
+
+            # Write to a sibling temp file and rename, so a crash mid-write
+            # leaves the previous index intact rather than a truncated one.
+            tmp = meta_path.with_name(meta_path.name + ".tmp")
+            tmp.write_text(
+                json.dumps(
+                    {
+                        "contents": self._contents,
+                        "sources": self._sources,
+                        "metadatas": self._metadatas,
+                        "doc_ids": self._doc_ids,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            tmp.replace(meta_path)
+
+            if self._matrix is not None:
+                npz_path = self._npz_path()
+                npz_tmp = npz_path.with_name(npz_path.name + ".tmp.npz")
+                np.savez_compressed(npz_tmp, matrix=self._matrix)
+                npz_tmp.replace(npz_path)
+        except Exception:
+            logger.warning("Failed to persist dense memory index", exc_info=True)
 
     # -- embedder lifecycle ------------------------------------------------
 
@@ -620,6 +795,7 @@ class DenseMemory(MemoryBackend):
                 self._metadatas.append(dict(m))
                 self._doc_ids.append(doc_id)
                 self._id_to_index[doc_id] = len(self._contents) - 1
+        self._save()
         return new_ids
 
     def retrieve(
@@ -698,6 +874,7 @@ class DenseMemory(MemoryBackend):
             for did, i in list(self._id_to_index.items()):
                 if i > idx:
                     self._id_to_index[did] = i - 1
+        self._save()
         return True
 
     def clear(self) -> None:
@@ -709,6 +886,7 @@ class DenseMemory(MemoryBackend):
             self._metadatas.clear()
             self._doc_ids.clear()
             self._id_to_index.clear()
+        self._save()
 
     def count(self) -> int:
         """Number of stored documents."""

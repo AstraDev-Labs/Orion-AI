@@ -7,7 +7,7 @@ A personalized daily briefing that collects data from your connected services, s
 ### 1. Install and set up Orion
 
 ```bash
-git clone https://github.com/open-orion/Orion.git
+git clone https://github.com/AstraDev-Labs/Orion-AI.git
 cd Orion
 uv sync --extra dev
 ```

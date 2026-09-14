@@ -133,7 +133,6 @@ class OptimizationEngine:
         self.store = store
         self.max_trials = max_trials
         self.early_stop_patience = early_stop_patience
-        from typing import Any
         self._default_objectives: Any = None
 
     # ------------------------------------------------------------------

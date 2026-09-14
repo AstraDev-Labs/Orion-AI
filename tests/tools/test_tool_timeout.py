@@ -109,4 +109,4 @@ class TestToolTimeout:
         call = ToolCall(id="1", name="nonexistent", arguments="{}")
         result = executor.execute(call)
         assert not result.success
-        assert "Unknown tool" in result.content
+        assert "No tool named" in result.content

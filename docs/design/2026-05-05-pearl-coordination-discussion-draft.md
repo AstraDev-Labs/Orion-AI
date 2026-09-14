@@ -12,7 +12,7 @@
 
 ## Suggested body
 
-Hi Pearl team — we're [Orion](https://github.com/open-orion/Orion), a local-first personal AI agent framework from Stanford Hazy Research. We're working on a `mining` subsystem that lets OJ users mine Pearl through the agent framework. The first integration is the `vllm-miner`-on-H100/H200 path, which is straightforward. The second is Apple Silicon, where the situation is more interesting and we'd like to confirm a few things before we ship.
+Hi Pearl team — we're [Orion](https://github.com/AstraDev-Labs/Orion), a local-first personal AI agent framework from Stanford Hazy Research. We're working on a `mining` subsystem that lets OJ users mine Pearl through the agent framework. The first integration is the `vllm-miner`-on-H100/H200 path, which is straightforward. The second is Apple Silicon, where the situation is more interesting and we'd like to confirm a few things before we ship.
 
 We have a v1 architecture that ships **today** using only your published Python packages (`py-pearl-mining`, `miner-base`, `pearl-gateway`) without any new code in your tree, plus an aspirational v2/v3 path that does involve potentially upstream contributions. Three asks below, plus a heads-up.
 

@@ -197,9 +197,15 @@ class AgentConfigEvolver:
         tools: List[str],
         max_turns: int = 10,
         temperature: float = 0.3,
-        system_prompt: str = "",
+        system_prompt: Optional[str] = None,
     ) -> Path:
         """Write agent TOML config, archiving previous version first.
+
+        ``system_prompt`` defaults to ``None`` and is omitted from the
+        written file entirely when not given -- nothing in this pipeline
+        actually mines or recommends a system prompt, so writing an empty
+        string here (the old default) silently proposed wiping out
+        whatever real prompt the agent already had, on every single run.
 
         Returns the :class:`Path` to the written config file.
         """
@@ -210,15 +216,15 @@ class AgentConfigEvolver:
             self._archive(agent_name, config_path)
 
         # Build the TOML data
-        data = {
-            "agent": {
-                "name": agent_name,
-                "tools": tools,
-                "max_turns": max_turns,
-                "temperature": temperature,
-                "system_prompt": system_prompt,
-            }
+        agent_data: Dict[str, Any] = {
+            "name": agent_name,
+            "tools": tools,
+            "max_turns": max_turns,
+            "temperature": temperature,
         }
+        if system_prompt is not None:
+            agent_data["system_prompt"] = system_prompt
+        data = {"agent": agent_data}
 
         _write_toml(config_path, data)
         return config_path

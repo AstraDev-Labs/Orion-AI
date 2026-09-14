@@ -1,0 +1,151 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource/orbitron/600.css";
+@import "@fontsource/orbitron/700.css";
+
+/* Orion brand, taken from the banner: deep space navy, electric cyan and a
+   holographic blue-violet edge. One committed dark look for the whole site. */
+@theme {
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Orbitron", "Inter Variable", system-ui, sans-serif;
+
+  --color-ink: #02060f;
+  --color-night: #050d1f;
+  --color-deep: #0a1731;
+  --color-line: rgb(96 165 250 / 0.16);
+  --color-line-strong: rgb(96 165 250 / 0.34);
+  --color-text: #e8f1ff;
+  --color-muted: #9fb2d3;
+  --color-faint: #6b7fa3;
+  --color-cyan: #38bdf8;
+  --color-cyan-soft: #7dd3fc;
+  --color-blue: #3b82f6;
+  --color-violet: #a78bfa;
+  --color-warn: #fbbf24;
+  --color-ok: #34d399;
+  --color-bad: #f87171;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    scroll-behavior: smooth;
+    background: var(--color-ink);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+  }
+  body {
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    color: var(--color-text);
+    background:
+      radial-gradient(1200px 700px at 50% -10%, rgb(56 189 248 / 0.12), transparent 60%),
+      radial-gradient(900px 600px at 100% 30%, rgb(167 139 250 / 0.07), transparent 60%),
+      var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: rgb(56 189 248 / 0.35); }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--color-cyan); outline-offset: 3px; border-radius: 6px; }
+}
+
+@layer components {
+  .container-site { width: min(1160px, 100% - 2.5rem); margin-inline: auto; }
+
+  .eyebrow {
+    font-family: var(--font-display);
+    font-size: 0.72rem;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--color-cyan-soft);
+  }
+
+  .display {
+    font-family: var(--font-display);
+    letter-spacing: 0.04em;
+    line-height: 1.08;
+  }
+
+  .text-gradient {
+    background: linear-gradient(100deg, #f5f9ff 10%, #7dd3fc 45%, #a5b4fc 75%, #e0e7ff 95%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .panel {
+    background: linear-gradient(180deg, rgb(15 33 70 / 0.55), rgb(7 16 36 / 0.55));
+    border: 1px solid var(--color-line);
+    border-radius: 18px;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    backdrop-filter: blur(6px);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.55rem;
+    border-radius: 999px;
+    padding: 0.78rem 1.4rem;
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: transform 150ms ease, box-shadow 200ms ease, background 200ms ease, border-color 200ms ease;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    color: #02101f;
+    background: linear-gradient(120deg, #7dd3fc, #38bdf8 45%, #818cf8);
+    box-shadow: 0 0 0 1px rgb(125 211 252 / 0.5), 0 10px 40px -10px rgb(56 189 248 / 0.7);
+  }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 0 0 1px rgb(125 211 252 / 0.8), 0 14px 50px -10px rgb(56 189 248 / 0.9); }
+  .btn-ghost {
+    color: var(--color-text);
+    border: 1px solid var(--color-line-strong);
+    background: rgb(10 23 49 / 0.5);
+  }
+  .btn-ghost:hover { border-color: var(--color-cyan); background: rgb(14 32 66 / 0.7); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  .badge-alpha {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: #fde68a;
+    background: rgb(251 191 36 / 0.1);
+    border: 1px solid rgb(251 191 36 / 0.35);
+  }
+
+  /* Long-form pages: privacy, terms, about... */
+  .prose-site { color: var(--color-muted); line-height: 1.75; font-size: 1.02rem; }
+  .prose-site h1 { font-family: var(--font-display); color: var(--color-text); font-size: clamp(1.9rem, 4vw, 2.6rem); line-height: 1.15; letter-spacing: 0.03em; margin: 0 0 0.6rem; }
+  .prose-site h2 { color: var(--color-text); font-size: 1.35rem; font-weight: 650; margin: 2.6rem 0 0.8rem; padding-top: 1.4rem; border-top: 1px solid var(--color-line); }
+  .prose-site h3 { color: var(--color-text); font-size: 1.08rem; font-weight: 650; margin: 1.8rem 0 0.5rem; }
+  .prose-site p, .prose-site ul, .prose-site ol, .prose-site table { margin: 0 0 1rem; }
+  .prose-site ul { list-style: disc; padding-left: 1.3rem; }
+  .prose-site ol { list-style: decimal; padding-left: 1.3rem; }
+  .prose-site li { margin: 0.3rem 0; }
+  .prose-site li::marker { color: var(--color-cyan); }
+  .prose-site a { color: var(--color-cyan-soft); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgb(125 211 252 / 0.4); }
+  .prose-site a:hover { text-decoration-color: var(--color-cyan-soft); }
+  .prose-site strong { color: var(--color-text); font-weight: 600; }
+  .prose-site code { font-size: 0.88em; color: #bae6fd; background: rgb(56 189 248 / 0.08); border: 1px solid var(--color-line); border-radius: 6px; padding: 0.1rem 0.35rem; }
+  .prose-site table { width: 100%; border-collapse: collapse; font-size: 0.95rem; display: block; overflow-x: auto; }
+  .prose-site th, .prose-site td { text-align: left; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--color-line); vertical-align: top; }
+  .prose-site th { color: var(--color-text); font-weight: 600; }
+  .prose-site blockquote { border-left: 3px solid var(--color-warn); background: rgb(251 191 36 / 0.06); padding: 0.8rem 1rem; border-radius: 0 10px 10px 0; color: #fde68a; }
+
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity 700ms ease, transform 700ms ease; }
+  .reveal.is-visible { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+  }
+}

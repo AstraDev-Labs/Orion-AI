@@ -1,18 +1,25 @@
 # Telemetry
 
-Orion ships **anonymous usage telemetry** by default so the team can
-see where the product breaks, what features people actually use, and
-how to make it better. This page documents exactly what is and isn't
-collected, where the data goes, and how to opt out.
+Orion is local-first. **It sends no usage analytics.** Analytics is
+off, and Orion ships with no analytics server or key built in. The code
+below only runs if you set up an endpoint of your own. This page documents
+what it would collect in that case, and how to keep it off.
 
 ## TL;DR
 
-- **On by default**, anonymous, no chat content.
-- **Anonymous** — one random UUID per install, no email, no name, no IP.
-- **No chat content, ever.** Only counts, timings, and feature names.
-- **Self-hosted backend** on the Orion team's PostHog instance —
-  data is not sold or shared with third parties.
-- **365-day retention**, after which events are deleted automatically.
+- **Off by default, with no built-in destination.** Nothing is sent
+  unless you set `[analytics] enabled = true` *and* your own `host` and
+  `key` (or `OPENORION_ANALYTICS_HOST` / `OPENORION_ANALYTICS_KEY` for
+  `install.sh`).
+- If you do enable it: anonymous (one random UUID per install, no
+  email, name or IP), and **no chat content, ever**, only counts,
+  timings and feature names.
+- The opt-in savings leaderboard likewise has no built-in database; it
+  does nothing unless a build sets `VITE_SUPABASE_URL` and
+  `VITE_SUPABASE_ANON_KEY`.
+
+The rest of this page describes the event catalogue and safeguards for
+anyone who turns analytics on for their own deployment.
 
 ## What we collect
 
@@ -75,13 +82,8 @@ dropped. Tests covering the patterns: [`tests/analytics/test_redaction.py`](../t
 
 ## Where the data goes
 
-- **Today** (alpha): PostHog Cloud (US region) free tier. Disclosed
-  here for transparency.
-- **Production target**: A self-hosted PostHog instance at
-  `analytics.orion.ai`, Hetzner US-East. Single-tenant, operated
-  by the Orion team.
-- **Never** sold, shared with advertisers, or used for anything other
-  than improving Orion.
+- **Nowhere, by default.** Orion has no analytics server. Events go only
+  to the PostHog `host` you configure yourself.
 
 ## Opting out
 

@@ -198,3 +198,35 @@ def test_inject_context_does_not_mutate_original():
     augmented = inject_context("query", messages, backend)
     assert len(messages) == original_len
     assert len(augmented) == original_len + 1
+
+
+def test_inject_context_leaves_the_users_message_untouched():
+    # Pasting memories into the user's message sent them twice and turned
+    # "set volume to 40" into a memory question the tool router then scored.
+    backend = _FakeMemory([RetrievalResult(content="likes jazz", score=0.9, source="chat")])
+    messages = [
+        Message(role=Role.SYSTEM, content="You are Orion."),
+        Message(role=Role.USER, content="set volume to 40"),
+    ]
+    augmented = inject_context("set volume to 40", messages, backend)
+    assert [m.role for m in augmented] == [Role.SYSTEM, Role.SYSTEM, Role.USER]
+    assert augmented[0].content == "You are Orion."
+    assert "likes jazz" in augmented[1].content
+    assert augmented[2].content == "set volume to 40"
+    assert sum("likes jazz" in m.content for m in augmented) == 1
+
+
+def test_inject_context_skips_duplicate_memories():
+    same = "User: weather?\nOrion: Sunny."
+    backend = _FakeMemory([RetrievalResult(content=same, score=0.9), RetrievalResult(content=same, score=0.9)])
+    augmented = inject_context("weather", [Message(role=Role.USER, content="weather")], backend)
+    assert augmented[0].content.count("Sunny.") == 1
+
+
+def test_backend_score_floor_filters_unrelated_memories():
+    class _Floored(_FakeMemory):
+        context_score_floor = 0.6
+
+    backend = _Floored([RetrievalResult(content="small talk", score=0.52)])
+    messages = [Message(role=Role.USER, content="open notepad")]
+    assert inject_context("open notepad", messages, backend) == messages

@@ -20,6 +20,7 @@ from orion.cli.daemon_cmd import restart, start, status, stop
 from orion.cli.deep_research_setup_cmd import deep_research_setup
 from orion.cli.digest_cmd import digest
 from orion.cli.doctor_cmd import doctor
+from orion.cli.email_cmd import email
 from orion.cli.eval_cmd import eval_group
 from orion.cli.feedback_cmd import feedback_group
 from orion.cli.gateway_cmd import gateway
@@ -122,6 +123,7 @@ cli.add_command(deep_research_setup, "deep-research-setup")
 cli.add_command(deep_research_setup, "research")
 cli.add_command(self_update, "self-update")
 cli.add_command(voice, "voice")
+cli.add_command(email, "email")
 cli.add_command(bootstrap_cmd, "_bootstrap")
 
 # Gateway CLI commands (lazy import to avoid pulling starlette)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import statistics
 import time
 from collections.abc import AsyncIterator
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from orion.core.events import EventBus, EventType
 from orion.core.types import Message, TelemetryRecord
@@ -96,7 +96,15 @@ class InstrumentedEngine(InferenceEngine):
 
         gpu_sample: Optional[GpuSample] = None
         energy_sample: Optional[Any] = None
-        t0 = time.time()
+        # perf_counter, not time(): the wall clock has ~15.6ms resolution on
+        # Windows, so a fast call measured 0.0 latency and every derived
+        # metric (throughput, phase energy split) silently collapsed to zero.
+        # It is also monotonic, so an NTP step cannot produce negative latency.
+        t0 = time.perf_counter()
+        # ...but perf_counter is seconds since boot, not a date. The record's
+        # timestamp must be wall-clock time: storing t0 dated every call to
+        # 1970, so "this session" and history queries silently counted zero.
+        started_at = time.time()
 
         # Prefer EnergyMonitor over legacy GpuMonitor
         if self._energy_monitor is not None:
@@ -126,7 +134,7 @@ class InstrumentedEngine(InferenceEngine):
                 **kwargs,
             )
 
-        latency = time.time() - t0
+        latency = time.perf_counter() - t0
 
         usage = result.get("usage", {})
         completion_tokens = usage.get("completion_tokens", 0)
@@ -205,7 +213,7 @@ class InstrumentedEngine(InferenceEngine):
 
         prompt_tok = usage.get("prompt_tokens", 0)
         record = TelemetryRecord(
-            timestamp=t0,
+            timestamp=started_at,
             model_id=model,
             prompt_tokens=prompt_tok,
             prompt_tokens_evaluated=prompt_tokens_evaluated or prompt_tok,
@@ -302,6 +310,49 @@ class InstrumentedEngine(InferenceEngine):
         **kwargs: Any,
     ) -> Any:
         """Stream with per-token timing and full telemetry recording."""
+        source = self._inner.stream(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs,
+        )
+        async for token in self._instrument_stream(source, model, messages, lambda _t: True):
+            yield token
+
+    async def stream_full(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+        **kwargs: Any,
+    ) -> AsyncIterator["StreamChunk"]:
+        """Delegate to the inner engine's stream_full (tool-call support), recorded
+        like stream(): the tool agent streams its turns through here, and
+        leaving it unrecorded dropped those calls from Reckoning."""
+        source = self._inner.stream_full(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs,
+        )
+        async for chunk in self._instrument_stream(
+            source, model, messages, lambda c: bool(getattr(c, "content", None))
+        ):
+            yield chunk
+
+    async def _instrument_stream(
+        self,
+        source: AsyncIterator[Any],
+        model: str,
+        messages: Sequence[Message],
+        is_token: Callable[[Any], bool],
+    ) -> AsyncIterator[Any]:
+        """Yield everything from `source`, timing the items `is_token` accepts,
+        then publish the telemetry record."""
         self._bus.publish(
             EventType.INFERENCE_START,
             {
@@ -310,7 +361,15 @@ class InstrumentedEngine(InferenceEngine):
             },
         )
 
-        t0 = time.time()
+        # perf_counter, not time(): the wall clock has ~15.6ms resolution on
+        # Windows, so a fast call measured 0.0 latency and every derived
+        # metric (throughput, phase energy split) silently collapsed to zero.
+        # It is also monotonic, so an NTP step cannot produce negative latency.
+        t0 = time.perf_counter()
+        # ...but perf_counter is seconds since boot, not a date. The record's
+        # timestamp must be wall-clock time: storing t0 dated every call to
+        # 1970, so "this session" and history queries silently counted zero.
+        started_at = time.time()
         token_timestamps: list[float] = []
         token_count = 0
 
@@ -319,41 +378,26 @@ class InstrumentedEngine(InferenceEngine):
 
         if self._energy_monitor is not None:
             with self._energy_monitor.sample() as energy_sample:
-                async for token in self._inner.stream(
-                    messages,
-                    model=model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    **kwargs,
-                ):
-                    token_timestamps.append(time.time())
-                    token_count += 1
-                    yield token
+                async for item in source:
+                    if is_token(item):
+                        token_timestamps.append(time.perf_counter())
+                        token_count += 1
+                    yield item
         elif self._gpu_monitor is not None:
             with self._gpu_monitor.sample() as gpu_sample:
-                async for token in self._inner.stream(
-                    messages,
-                    model=model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    **kwargs,
-                ):
-                    token_timestamps.append(time.time())
-                    token_count += 1
-                    yield token
+                async for item in source:
+                    if is_token(item):
+                        token_timestamps.append(time.perf_counter())
+                        token_count += 1
+                    yield item
         else:
-            async for token in self._inner.stream(
-                messages,
-                model=model,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **kwargs,
-            ):
-                token_timestamps.append(time.time())
-                token_count += 1
-                yield token
+            async for item in source:
+                if is_token(item):
+                    token_timestamps.append(time.perf_counter())
+                    token_count += 1
+                yield item
 
-        latency = time.time() - t0
+        latency = time.perf_counter() - t0
         ttft = token_timestamps[0] - t0 if token_timestamps else 0.0
         throughput = token_count / latency if latency > 0 else 0.0
 
@@ -422,10 +466,18 @@ class InstrumentedEngine(InferenceEngine):
 
         engine_id = getattr(self._inner, "engine_id", "unknown")
 
+        # Real token counts from the engine's final stream message when it
+        # reports them (Ollama does). Without this a streamed reply recorded
+        # 0 prompt tokens and text-chunk counts as "tokens", so Reckoning's
+        # avoided-cost figure came out far too low.
+        usage = _stream_usage(self._inner)
         record = TelemetryRecord(
-            timestamp=t0,
+            timestamp=started_at,
             model_id=model,
-            completion_tokens=token_count,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            prompt_tokens_evaluated=usage.get("prompt_tokens_evaluated", 0),
+            total_tokens=usage.get("total_tokens", 0) or (usage.get("prompt_tokens", 0) + (usage.get("completion_tokens") or token_count)),
+            completion_tokens=usage.get("completion_tokens") or token_count,
             latency_seconds=latency,
             ttft=ttft,
             throughput_tok_per_sec=throughput,
@@ -475,25 +527,6 @@ class InstrumentedEngine(InferenceEngine):
         self._bus.publish(EventType.INFERENCE_END, event_data)
         self._bus.publish(EventType.TELEMETRY_RECORD, {"record": record})
 
-    async def stream_full(
-        self,
-        messages: Sequence[Message],
-        *,
-        model: str,
-        temperature: float = 0.7,
-        max_tokens: int = 1024,
-        **kwargs: Any,
-    ) -> AsyncIterator["StreamChunk"]:
-        """Delegate to inner engine's stream_full for tool-call support."""
-        async for chunk in self._inner.stream_full(
-            messages,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **kwargs,
-        ):
-            yield chunk
-
     def list_models(self) -> List[str]:
         return self._inner.list_models()
 
@@ -502,6 +535,23 @@ class InstrumentedEngine(InferenceEngine):
 
     def close(self) -> None:
         self._inner.close()
+
+
+def _stream_usage(engine: Any) -> Dict[str, int]:
+    """Usage the innermost engine recorded for its last stream, if any.
+
+    Wrappers (guardrails, multi-engine) sit between this and the engine that
+    actually spoke to the model, so follow their ``_inner``/``_engine`` links.
+    """
+    seen = 0
+    current = engine
+    while current is not None and seen < 6:
+        usage = getattr(current, "_last_stream_usage", None)
+        if isinstance(usage, dict) and usage:
+            return usage
+        current = getattr(current, "_inner", None) or getattr(current, "_engine", None)
+        seen += 1
+    return {}
 
 
 __all__ = ["InstrumentedEngine", "_compute_itl_stats", "_percentile"]

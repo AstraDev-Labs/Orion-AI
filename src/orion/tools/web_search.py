@@ -155,6 +155,20 @@ class WebSearchTool(BaseTool):
                     success=False,
                 )
 
+        # Weather: live numbers instead of result pages that only say "check
+        # current conditions" -- a small model searched again and again for a
+        # temperature that was never in the snippets.
+        from orion.tools.live_weather import weather_for_query
+
+        weather = weather_for_query(query)
+        if weather:
+            return ToolResult(
+                tool_name="web_search",
+                content=weather,
+                success=True,
+                metadata={"mode": "live_weather", "source": "open-meteo"},
+            )
+
         max_results = params.get("max_results", self._max_results)
 
         try:

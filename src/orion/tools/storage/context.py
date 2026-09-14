@@ -55,7 +55,8 @@ def build_context_message(
         " base. If the user's question asks about their memory, notes, vault,"
         " preferences, plans, or personal context, answer directly from this"
         " retrieved context. Do not claim you lack memory when relevant context"
-        " is present. Cite sources where applicable.\n\n" + context_text
+        " is present. Cite sources where applicable. Past replies in it may be"
+        " out of date or wrong: current tool results and live facts win.\n\n" + context_text
     )
     return Message(role=Role.SYSTEM, content=content)
 
@@ -163,8 +164,18 @@ def inject_context(
             if results:
                 break
 
-    # Filter by minimum score
-    results = [r for r in results if r.score >= cfg.min_score]
+    # Filter by minimum score. A backend can raise the floor for its own score
+    # scale: dense cosine scores unrelated chit-chat at ~0.45-0.58, so with the
+    # default 0 every request carried five random past exchanges.
+    floor = max(cfg.min_score, float(getattr(backend, "context_score_floor", 0.0) or 0.0))
+    results = [r for r in results if r.score >= floor]
+
+    # The same exchange is often stored more than once.
+    seen_content: set[str] = set()
+    results = [
+        r for r in results
+        if not (r.content.strip() in seen_content or seen_content.add(r.content.strip()))
+    ]
 
     if not results:
         return messages
@@ -194,27 +205,18 @@ def inject_context(
         },
     )
 
-    # Build context message and prepend. Also attach the context to the last
-    # user message because small local chat models sometimes underweight
-    # system-only memory instructions.
+    # One copy, as a system message right after the existing system prompt.
+    # It used to be pasted into the user's message as well ("Use this retrieved
+    # memory to answer the question. ... Question: set volume to 40"): every
+    # memory was sent twice, an action request was reframed as a memory
+    # question, and the tool router scored the memories instead of the request.
     ctx_msg = build_context_message(truncated)
-    context_text = format_context(truncated)
     enriched_messages = list(messages)
-    for index in range(len(enriched_messages) - 1, -1, -1):
-        msg = enriched_messages[index]
-        if msg.role == Role.USER:
-            enriched_messages[index] = Message(
-                role=msg.role,
-                content=(
-                    "Use this retrieved memory to answer the question.\n\n"
-                    f"{context_text}\n\n"
-                    f"Question: {msg.content}"
-                ),
-                name=msg.name,
-                tool_call_id=msg.tool_call_id,
-            )
-            break
-    return [ctx_msg] + enriched_messages
+    insert_at = 0
+    while insert_at < len(enriched_messages) and enriched_messages[insert_at].role == Role.SYSTEM:
+        insert_at += 1
+    enriched_messages.insert(insert_at, ctx_msg)
+    return enriched_messages
 
 
 __all__ = [

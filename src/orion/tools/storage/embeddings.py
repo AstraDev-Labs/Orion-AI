@@ -68,7 +68,7 @@ class OllamaEmbedder(Embedder):
     model:
         Ollama model tag; defaults to ``nomic-embed-text`` (768-dim).
     base_url:
-        Ollama server base URL.  Defaults to ``http://localhost:11434``.
+        Ollama server base URL.  Defaults to ``http://127.0.0.1:11434`` (not localhost: see engine/ollama.py _DEFAULT_HOST).
     batch_size:
         Items per HTTP request.  Tuned for Ollama — larger batches help
         throughput but increase memory on the server.
@@ -82,7 +82,7 @@ class OllamaEmbedder(Embedder):
     def __init__(
         self,
         model: str = "nomic-embed-text",
-        base_url: str = "http://localhost:11434",
+        base_url: str = "http://127.0.0.1:11434",
         *,
         batch_size: int = 16,
         max_parallel: int = 8,
@@ -102,7 +102,21 @@ class OllamaEmbedder(Embedder):
         """Issue one HTTP request for ``texts`` and return raw vectors."""
         resp = self._httpx.post(
             f"{self._base_url}/api/embed",
-            json={"model": self._model, "input": texts},
+            json={
+                "model": self._model,
+                "input": texts,
+                # Force CPU for the embedder specifically. On small-VRAM
+                # setups (e.g. a 4GB card already holding a 3GB chat
+                # model), letting Ollama also try to keep the embedder
+                # resident on GPU leaves no room for either -- observed
+                # here as the chat model getting split 37%/63% GPU/CPU and
+                # replies taking 70+ seconds. Embeddings are latency-
+                # tolerant background work; chat responsiveness isn't.
+                "options": {"num_gpu": 0},
+                # Stay loaded between turns: a reload before every memory
+                # lookup added seconds to each reply.
+                "keep_alive": "30m",
+            },
             timeout=self._timeout_s,
         )
         resp.raise_for_status()

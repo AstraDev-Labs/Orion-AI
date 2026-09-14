@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, List, Optional
@@ -65,8 +66,17 @@ class StdioTransport(MCPTransport):
 
     def _start(self) -> None:
         """Start the subprocess."""
+        command = list(self._command)
+        if command:
+            # subprocess.Popen without shell=True does not consult PATHEXT,
+            # so on Windows a bare "npx" (really npx.cmd) fails with
+            # WinError 2 even though it's on PATH. shutil.which() resolves
+            # the real executable (npx.cmd) the same way the shell would.
+            resolved = shutil.which(command[0])
+            if resolved:
+                command[0] = resolved
         self._process = subprocess.Popen(
-            self._command,
+            command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

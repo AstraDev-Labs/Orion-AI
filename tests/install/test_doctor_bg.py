@@ -6,12 +6,13 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from orion.cli._bg_state import model_state_filename
 from orion.cli.doctor_cmd import doctor
 
 
 def test_doctor_shows_bg_section_when_state_present(tmp_orion_home: Path) -> None:
     (tmp_orion_home / ".state" / "extension-built").write_text("")
-    (tmp_orion_home / ".state" / "models" / "qwen3.5:9b.ready").write_text("")
+    (tmp_orion_home / ".state" / "models" / model_state_filename("qwen3.5:9b", "ready")).write_text("")
     runner = CliRunner()
     result = runner.invoke(doctor, [], catch_exceptions=False)
     assert "Background tasks" in result.output

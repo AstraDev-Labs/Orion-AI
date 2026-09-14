@@ -14,7 +14,17 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from orion.evals.comparison.table_gen import (
+import pytest
+
+# table_gen requires polars, which only ships with the optional
+# ``framework-comparison`` extra. Skip this module rather than breaking
+# collection for the whole suite when that extra isn't installed.
+pytest.importorskip(
+    "polars",
+    reason="requires the 'framework-comparison' extra",
+)
+
+from orion.evals.comparison.table_gen import (  # noqa: E402
     _build_t1,
     load_results,
 )

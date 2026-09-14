@@ -11,12 +11,49 @@ from orion.tools._stubs import BaseTool, ToolSpec
 
 
 class _BrowserSession:
-    """Manages a shared Playwright browser session (lazy init)."""
+    """A shared Playwright browser session (lazy init) on one dedicated thread.
+
+    Playwright's sync API binds its objects to the thread that created them,
+    but the tool executor runs every call on a fresh worker thread -- so a
+    second browser call used to fail with "cannot switch to a different
+    thread". All browser work is funnelled through ``run()`` instead.
+    """
+
+    # Browsers already installed on most machines, tried before Playwright's
+    # own Chromium download (which needs `playwright install chromium`).
+    _CHANNELS = ("msedge", "chrome")
 
     def __init__(self) -> None:
         self._playwright = None
         self._browser = None
         self._page = None
+        self._thread_pool = None
+
+    def run(self, fn):
+        """Run ``fn()`` on the browser thread and return its result."""
+        import concurrent.futures
+
+        if self._thread_pool is None:
+            self._thread_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="orion-browser"
+            )
+        return self._thread_pool.submit(fn).result()
+
+    def _launch(self):
+        errors = []
+        for channel in self._CHANNELS:
+            try:
+                return self._playwright.chromium.launch(headless=True, channel=channel)
+            except Exception as exc:  # that browser is not installed
+                errors.append(f"{channel}: {str(exc).splitlines()[0]}")
+        try:
+            return self._playwright.chromium.launch(headless=True)
+        except Exception as exc:
+            errors.append(f"bundled chromium: {str(exc).splitlines()[0]}")
+        raise RuntimeError(
+            "No browser available for automation. Install Microsoft Edge or Google Chrome, "
+            "or run `playwright install chromium`. Details: " + "; ".join(errors)
+        )
 
     def _ensure_browser(self) -> None:
         if self._page is not None:
@@ -28,8 +65,12 @@ class _BrowserSession:
                 "playwright not installed. Install with: uv sync --extra browser"
             )
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=True)
+        self._browser = self._launch()
         self._page = self._browser.new_page()
+        # Fail fast on a missing element. Playwright's 30 s default equalled
+        # the tool timeout, so a wrong selector hung the call and then blocked
+        # every later browser call queued behind it on this thread.
+        self._page.set_default_timeout(10_000)
 
     @property
     def page(self):
@@ -37,11 +78,29 @@ class _BrowserSession:
         return self._page
 
     def close(self) -> None:
-        if self._browser:
-            self._browser.close()
-        if self._playwright:
-            self._playwright.stop()
-        self._playwright = self._browser = self._page = None
+        def _close() -> None:
+            if self._browser:
+                self._browser.close()
+            if self._playwright:
+                self._playwright.stop()
+            self._playwright = self._browser = self._page = None
+
+        self.run(_close)
+
+
+def _on_browser_thread(cls):
+    """Class decorator: run the tool's execute() on the browser session thread."""
+    original = cls.execute
+
+    def execute(self, **params):
+        session = _session
+        if not isinstance(session, _BrowserSession):  # a test double, run inline
+            return original(self, **params)
+        return session.run(lambda: original(self, **params))
+
+    execute.__doc__ = original.__doc__
+    cls.execute = execute
+    return cls
 
 
 _session = _BrowserSession()
@@ -53,6 +112,7 @@ _session = _BrowserSession()
 
 
 @ToolRegistry.register("browser_navigate")
+@_on_browser_thread
 class BrowserNavigateTool(BaseTool):
     """Navigate to a URL in the browser."""
 
@@ -152,6 +212,7 @@ class BrowserNavigateTool(BaseTool):
 
 
 @ToolRegistry.register("browser_click")
+@_on_browser_thread
 class BrowserClickTool(BaseTool):
     """Click an element on the page."""
 
@@ -232,6 +293,7 @@ class BrowserClickTool(BaseTool):
 
 
 @ToolRegistry.register("browser_type")
+@_on_browser_thread
 class BrowserTypeTool(BaseTool):
     """Type text into a form field."""
 
@@ -323,6 +385,7 @@ class BrowserTypeTool(BaseTool):
 
 
 @ToolRegistry.register("browser_screenshot")
+@_on_browser_thread
 class BrowserScreenshotTool(BaseTool):
     """Take a screenshot of the current page."""
 
@@ -403,6 +466,7 @@ class BrowserScreenshotTool(BaseTool):
 
 
 @ToolRegistry.register("browser_extract")
+@_on_browser_thread
 class BrowserExtractTool(BaseTool):
     """Extract content from the current page."""
 

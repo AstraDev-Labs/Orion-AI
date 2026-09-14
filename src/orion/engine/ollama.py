@@ -29,20 +29,37 @@ class OllamaEngine(InferenceEngine):
 
     engine_id = "ollama"
 
-    _DEFAULT_HOST = "http://localhost:11434"
+    # 127.0.0.1, not localhost: on Windows "localhost" resolves to ::1 first,
+    # Ollama listens on IPv4 only, and httpx waits ~2s on the refused IPv6
+    # attempt before falling back. Measured: 2026ms vs 27ms per fresh
+    # connection -- and httpx drops idle connections after 5s, so a real
+    # conversation paid that ~2s again on nearly every turn.
+    _DEFAULT_HOST = "http://127.0.0.1:11434"
 
     def __init__(
         self,
         host: str | None = None,
         *,
         timeout: float = 1800.0,
+        num_ctx: int = 8192,
+        keep_alive: str = "30m",
     ) -> None:
         # Priority: explicit host (from config.toml) > OLLAMA_HOST env var > default
         if host is None:
             env_host = os.environ.get("OLLAMA_HOST")
             host = env_host or self._DEFAULT_HOST
+        # OLLAMA_HOST is commonly set without a scheme (e.g. by the Ollama
+        # installer itself, as "127.0.0.1:11434") since Ollama's own server
+        # accepts that form directly. httpx requires a full URL, so add one.
+        if host and "://" not in host:
+            host = f"http://{host}"
         self._host = host.rstrip("/")
         self._client = httpx.Client(base_url=self._host, timeout=timeout)
+        # One context size for every method -- see OllamaEngineConfig.num_ctx
+        # for why a mismatch between calls costs a full model reload.
+        self._num_ctx = int(num_ctx)
+        # See OllamaEngineConfig.keep_alive.
+        self._keep_alive = keep_alive
         # Last stream usage — captured from Ollama's final chunk
         self._last_stream_usage: Dict[str, int] = {}
 
@@ -73,8 +90,9 @@ class OllamaEngine(InferenceEngine):
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
-                "num_ctx": kwargs.get("num_ctx", 4096),
+                "num_ctx": kwargs.get("num_ctx", self._num_ctx),
             },
+            "keep_alive": self._keep_alive,
         }
         # Disable extended thinking by default (Qwen3.5 etc.).
         # When enabled, thinking tokens consume the entire budget and
@@ -201,8 +219,9 @@ class OllamaEngine(InferenceEngine):
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
-                "num_ctx": kwargs.get("num_ctx", 4096),
+                "num_ctx": kwargs.get("num_ctx", self._num_ctx),
             },
+            "keep_alive": self._keep_alive,
         }
         # Mirror generate()'s default: disable extended thinking unless the
         # caller opted in. Qwen3/etc. with thinking on can stall the visible
@@ -283,8 +302,9 @@ class OllamaEngine(InferenceEngine):
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
-                "num_ctx": kwargs.get("num_ctx", 8192),
+                "num_ctx": kwargs.get("num_ctx", self._num_ctx),
             },
+            "keep_alive": self._keep_alive,
         }
         if "think" not in kwargs:
             payload["think"] = False
@@ -310,10 +330,6 @@ class OllamaEngine(InferenceEngine):
         """Execute the streaming request and yield parsed StreamChunks."""
         try:
             with self._client.stream("POST", "/api/chat", json=payload) as resp:
-                if resp.status_code == 400:
-                    import json
-                    with open("C:/Users/Tharun/Documents/Orion AI/debug_payload.json", "w") as f:
-                        json.dump(payload, f, indent=2)
                 if resp.status_code == 400 and retry_without_tools:
                     # Model doesn't support tools — retry without them.
                     payload.pop("tools", None)
@@ -394,6 +410,27 @@ class OllamaEngine(InferenceEngine):
                 f"Ollama not reachable at {self._host}"
             ) from exc
 
+    def preload(self, model: str) -> bool:
+        """Load `model` now and keep it loaded for keep_alive.
+
+        Uses the same num_ctx as real requests: a different context size would
+        make the first real request reload the model anyway.
+        """
+        try:
+            resp = self._client.post(
+                "/api/generate",
+                json={
+                    "model": model,
+                    "prompt": "",
+                    "keep_alive": self._keep_alive,
+                    "options": {"num_ctx": self._num_ctx},
+                },
+                timeout=300.0,
+            )
+            return resp.status_code == 200
+        except httpx.HTTPError:
+            return False
+
     def list_models(self) -> List[str]:
         try:
             resp = self._client.get("/api/tags", timeout=5.0)
@@ -410,7 +447,16 @@ class OllamaEngine(InferenceEngine):
             )
             return []
         data = resp.json()
-        return [m["name"] for m in data.get("models", [])]
+        # Ollama's /api/tags lists embedding-only models (e.g. nomic-embed-text)
+        # alongside chat models with no separate endpoint. Exclude anything
+        # that doesn't advertise "completion" so embedding models never get
+        # offered/auto-selected as a chat model. Models with no `capabilities`
+        # field at all (older Ollama versions) are kept rather than dropped.
+        return [
+            m["name"]
+            for m in data.get("models", [])
+            if "capabilities" not in m or "completion" in m["capabilities"]
+        ]
 
     def health(self) -> bool:
         try:

@@ -371,6 +371,10 @@ class TestGemmaCppDiscovery:
 
 
 @pytest.mark.live
+@pytest.mark.skipif(
+    not os.environ.get("GEMMA_CPP_MODEL_PATH"),
+    reason="needs downloaded Gemma weights; set GEMMA_CPP_MODEL_PATH",
+)
 class TestGemmaCppLive:
     """Integration tests — require pygemma and downloaded Gemma weights.
 

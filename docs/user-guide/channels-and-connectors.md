@@ -174,7 +174,7 @@ The fastest way is to use the App Manifest — paste this JSON to configure ever
 4. **Add yourself as a test user** (required while app is unverified):
    [Open OAuth Consent Screen →](https://console.cloud.google.com/apis/credentials/consent)
    - Scroll to "Test users" → click "+ Add Users"
-   - Add your Gmail address (e.g. `jonsaadfalcon@gmail.com`)
+   - Add your Gmail address (e.g. `you@gmail.com`)
 
 5. **Add the redirect URI:**
    [Open Credentials →](https://console.cloud.google.com/apis/credentials)
@@ -298,7 +298,7 @@ We recommend creating **one Slack app** that handles both. The App Manifest belo
 
 8. **(Optional) Set the app icon:**
    - Go to Basic Information → Display Information
-   - Upload the [Orion icon](https://github.com/open-orion/Orion/blob/main/assets/orion-slack-icon.jpg)
+   - Upload the [Orion icon](https://github.com/AstraDev-Labs/Orion-AI/blob/main/assets/orion-banner.jpg)
 
 ### Required Bot Token Scopes (reference)
 

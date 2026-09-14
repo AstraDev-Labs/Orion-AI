@@ -67,15 +67,23 @@ class TestSend:
             assert payload["content"] == "Hello Discord!"
 
     def test_send_with_conversation_id(self):
+        """conversation_id is the destination channel, not a reply reference.
+
+        The generic wire_channel() handler passes the channel *type*
+        ("discord") as `channel` and the real destination id as
+        `conversation_id`, so send() prefers the latter. Posting to
+        /channels/discord/ would 404 -- see the note in discord_channel.py.
+        """
         ch = DiscordChannel(bot_token="my-bot-token")
 
         mock_response = MagicMock()
         mock_response.status_code = 200
 
         with patch("httpx.post", return_value=mock_response) as mock_post:
-            ch.send("987654321", "Reply!", conversation_id="msg-123")
-            payload = mock_post.call_args[1]["json"]
-            assert payload["message_reference"] == {"message_id": "msg-123"}
+            ch.send("discord", "Reply!", conversation_id="987654321")
+            url = mock_post.call_args[0][0]
+            assert "discord.com/api/v10/channels/987654321/messages" in url
+            assert mock_post.call_args[1]["json"]["content"] == "Reply!"
 
     def test_send_failure(self):
         ch = DiscordChannel(bot_token="my-bot-token")

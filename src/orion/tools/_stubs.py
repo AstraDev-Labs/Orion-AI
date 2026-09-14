@@ -85,6 +85,49 @@ class BaseTool(ABC):
 # ---------------------------------------------------------------------------
 
 
+def describe_tool_call(name: str, params: Dict[str, Any]) -> str:
+    """One line a person can approve or refuse, e.g. "Run shell command: dir"."""
+    if name == "shell_exec":
+        where = f" (in {params['working_dir']})" if params.get("working_dir") else ""
+        return f"Run shell command: {params.get('command', '')}{where}"
+    if name == "git_commit":
+        repo = params.get("repo_path") or "the current repository"
+        return f'Git commit "{params.get("message", "")}" in {repo}'
+    shown = ", ".join(f"{k}={v!r}" for k, v in params.items())
+    return f"Run {name}({shown})"[:300]
+
+
+def _queue_tool_for_approval(name: str, params: Dict[str, Any]) -> ToolResult:
+    """Queue a confirmation-required tool call as a high-tier pending action."""
+    try:
+        from orion.tools.proactive_tools import TIER_HIGH, get_store
+
+        description = describe_tool_call(name, params)
+        action = get_store().queue_action(
+            action_type=f"tool_call:{name}",
+            description=description,
+            payload={"tool": name, "arguments": params},
+            permission_key=f"tool_call:{name}",
+            tier=TIER_HIGH,
+        )
+    except Exception as exc:
+        return ToolResult(
+            tool_name=name,
+            content=f"Tool '{name}' needs the user's approval, but it could not be queued: {exc}",
+            success=False,
+        )
+    return ToolResult(
+        tool_name=name,
+        content=(
+            f"Nothing has run yet. Queued for the user's approval (id {action.id}): "
+            f"{description}. Tell the user exactly that in one short line and ask them "
+            "to say yes to run it or no to cancel."
+        ),
+        success=True,
+        metadata={"action_id": action.id, "status": "pending_approval"},
+    )
+
+
 class ToolExecutor:
     """Dispatch tool calls to registered tools with event bus integration.
 
@@ -107,8 +150,13 @@ class ToolExecutor:
         capability_policy: Optional[Any] = None,
         agent_id: str = "",
         boundary_guard: Optional[Any] = None,
+        approval_queue: bool = False,
     ) -> None:
         self._tools: Dict[str, BaseTool] = {t.spec.name: t for t in tools}
+        # Headless (server) use: a tool needing confirmation is queued for the
+        # user's approval instead of being refused outright. Without this,
+        # shell_exec and git_commit could never run from the app at all.
+        self._approval_queue = approval_queue
         self._bus = bus
         self._interactive = interactive
         self._confirm_callback = confirm_callback
@@ -121,9 +169,35 @@ class ToolExecutor:
         """Parse arguments, dispatch to tool, measure latency, emit events."""
         tool = self._tools.get(tool_call.name)
         if tool is None:
+            # Never leave the model at a dead end on a missing capability --
+            # redirect it toward drafting the tool itself (propose_new_tool,
+            # see tool_forge.py) rather than just reporting "not found" and
+            # stopping there. The redirect is inline, in the tool result the
+            # model sees on its very next turn of this same tool-calling
+            # loop, which reaches it more reliably than a static system
+            # prompt clause would.
+            if "propose_new_tool" in self._tools:
+                content = (
+                    f"No tool named '{tool_call.name}' exists yet. Do not tell "
+                    "the user this capability is simply unavailable -- call "
+                    "propose_new_tool now to draft a real implementation for "
+                    "it. It will be queued for the user's explicit approval "
+                    "before it can ever run, and needs a backend restart "
+                    "after that to become callable, so it won't work in this "
+                    "same turn -- say that plainly rather than implying it's "
+                    "ready immediately."
+                )
+            else:
+                content = (
+                    f"No tool named '{tool_call.name}' exists, and "
+                    "propose_new_tool (which drafts new tools for the user's "
+                    "approval) isn't enabled for this agent. Tell the user "
+                    "this capability needs propose_new_tool enabled in "
+                    "Governance -> Faculties before a new tool can be drafted."
+                )
             return ToolResult(
                 tool_name=tool_call.name,
-                content=f"Unknown tool: {tool_call.name}",
+                content=content,
                 success=False,
             )
 
@@ -208,6 +282,8 @@ class ToolExecutor:
         # Confirmation check for sensitive tools
         if tool.spec.requires_confirmation:
             if not self._interactive or self._confirm_callback is None:
+                if self._approval_queue:
+                    return _queue_tool_for_approval(tool_call.name, params)
                 return ToolResult(
                     tool_name=tool_call.name,
                     content=(

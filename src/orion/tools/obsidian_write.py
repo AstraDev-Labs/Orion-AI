@@ -70,8 +70,10 @@ class ObsidianWriteNoteTool(BaseTool):
                 vault_path = cfg.get("path") or cfg.get("vault_path")
 
             if not vault_path:
-                # Fallback to a hardcoded path if connector is not configured
-                vault_path = "C:/Users/Tharun/Documents/Orion AI/ObsidianVault"
+                # No vault linked yet: write to a notes folder inside Orion's own
+                # data directory, which exists for every user. (A developer's
+                # absolute path used to be hardcoded here.)
+                vault_path = str(DEFAULT_CONFIG_DIR / "notes")
 
             vault_dir = Path(vault_path)
             if not vault_dir.exists():

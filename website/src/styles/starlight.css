@@ -1,0 +1,35 @@
+/* Starlight docs in Orion's colours (dark and light themes). */
+:root {
+  --sl-font: "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --sl-color-accent-low: #06243d;
+  --sl-color-accent: #38bdf8;
+  --sl-color-accent-high: #bae6fd;
+  --sl-color-white: #f2f7ff;
+  --sl-color-gray-1: #dbe6f7;
+  --sl-color-gray-2: #b3c3de;
+  --sl-color-gray-3: #8397bb;
+  --sl-color-gray-4: #4c5f82;
+  --sl-color-gray-5: #283a5c;
+  --sl-color-gray-6: #111f3b;
+  --sl-color-black: #030a18;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #d6efff;
+  --sl-color-accent: #0369a1;
+  --sl-color-accent-high: #0b3a5c;
+  --sl-color-white: #030a18;
+  --sl-color-gray-1: #111f3b;
+  --sl-color-gray-2: #283a5c;
+  --sl-color-gray-3: #4c5f82;
+  --sl-color-gray-4: #8397bb;
+  --sl-color-gray-5: #c7d4ea;
+  --sl-color-gray-6: #eaf1fb;
+  --sl-color-gray-7: #f5f8fd;
+  --sl-color-black: #ffffff;
+}
+
+.site-title {
+  font-family: "Orbitron", var(--sl-font);
+  letter-spacing: 0.14em;
+}

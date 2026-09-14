@@ -27,6 +27,23 @@ def _weather_api_get(url: str, params: Dict[str, str]) -> Dict[str, Any]:
     return resp.json()
 
 
+# Countries that report weather in Fahrenheit; everywhere else uses Celsius.
+_IMPERIAL_COUNTRIES = frozenset({"US", "LR", "MM", "BS", "BZ", "KY", "PW"})
+
+
+def _units_for(location: str) -> tuple[str, str, str]:
+    """OpenWeatherMap units for *location* ("City,CC" or US "City,ST,US").
+
+    Always asking for imperial units told a user in Palayamkottai, India the
+    temperature in Fahrenheit.
+    """
+    parts = [p.strip().upper() for p in location.split(",") if p.strip()]
+    country = parts[-1] if len(parts) >= 2 else ""
+    if country in _IMPERIAL_COUNTRIES:
+        return "imperial", "°F", "mph"
+    return "metric", "°C", "m/s"
+
+
 @ConnectorRegistry.register("weather")
 class WeatherConnector(BaseConnector):
     """Fetch current weather and short-term forecast from OpenWeatherMap."""
@@ -63,22 +80,23 @@ class WeatherConnector(BaseConnector):
         """Yield Documents for current weather and forecast."""
         config = self._load_config()
         api_key = config["api_key"]
-        location = config.get("location", "San Francisco,CA")
+        location = config.get("location", "San Francisco,US")
+        units, temp_unit, wind_unit = _units_for(location)
 
         # Current weather
         current = _weather_api_get(
             "https://api.openweathermap.org/data/2.5/weather",
-            params={"q": location, "appid": api_key, "units": "imperial"},
+            params={"q": location, "appid": api_key, "units": units},
         )
         main = current.get("main", {})
         weather_desc = ", ".join(
             w.get("description", "") for w in current.get("weather", [])
         )
         content = (
-            f"Temperature: {main.get('temp')}°F, "
+            f"Temperature: {main.get('temp')}{temp_unit}, "
             f"Conditions: {weather_desc}, "
             f"Humidity: {main.get('humidity')}%, "
-            f"Wind: {current.get('wind', {}).get('speed')} mph"
+            f"Wind: {current.get('wind', {}).get('speed')} {wind_unit}"
         )
         yield Document(
             doc_id=f"weather-current-{location}",
@@ -102,7 +120,7 @@ class WeatherConnector(BaseConnector):
             params={
                 "q": location,
                 "appid": api_key,
-                "units": "imperial",
+                "units": units,
                 "cnt": "4",
             },
         )
@@ -111,7 +129,7 @@ class WeatherConnector(BaseConnector):
             dt_txt = entry.get("dt_txt", "")
             temp = entry.get("main", {}).get("temp")
             desc = ", ".join(w.get("description", "") for w in entry.get("weather", []))
-            summaries.append(f"{dt_txt}: {temp}°F, {desc}")
+            summaries.append(f"{dt_txt}: {temp}{temp_unit}, {desc}")
         forecast_content = "Forecast:\n" + "\n".join(summaries)
 
         yield Document(

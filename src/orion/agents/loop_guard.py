@@ -15,7 +15,12 @@ class LoopGuardConfig:
     """Configuration for the loop guard."""
 
     enabled: bool = True
-    max_identical_calls: int = 3  # SHA-256 of (tool_name, arguments)
+    # A call with byte-identical arguments repeated more than this is blocked.
+    # 2 still leaves room for one legitimate retry after a failure, while
+    # catching the far more common case of a weaker model re-issuing a call
+    # that already succeeded. At the previous value of 3 the block only landed
+    # on the 4th attempt, by which point several turns were already wasted.
+    max_identical_calls: int = 2  # SHA-256 of (tool_name, arguments)
     ping_pong_window: int = 6  # detect A-B-A-B cycling
     poll_tool_budget: int = 5  # max calls to same polling tool
     max_context_messages: int = 100  # context overflow threshold

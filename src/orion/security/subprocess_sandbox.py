@@ -6,12 +6,35 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 # Safe environment variables to pass through
+# Windows cannot execute anything without these. PATHEXT in particular is
+# how the OS resolves a bare `python` to `python.exe`; without it every
+# sandboxed command dies with exit code 9009 ("not found"). SYSTEMROOT is
+# required for DLL loading and socket init, COMSPEC is the shell used by
+# shell=True, and Windows uses TEMP/TMP rather than TMPDIR.
+_WINDOWS_ENV_VARS = frozenset(
+    {
+        "PATHEXT",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "COMSPEC",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+    }
+)
+
 _SAFE_ENV_VARS = frozenset(
     {
         "PATH",
@@ -50,6 +73,8 @@ def build_safe_env(
     """
     env: Dict[str, str] = {}
     allowed = _SAFE_ENV_VARS | frozenset(passthrough or [])
+    if sys.platform == "win32":
+        allowed = allowed | _WINDOWS_ENV_VARS
     for key in allowed:
         val = os.environ.get(key)
         if val is not None:
@@ -59,8 +84,32 @@ def build_safe_env(
     return env
 
 
+def _new_process_group_kwargs() -> Dict[str, Any]:
+    """Popen kwargs that start the child in its own process group."""
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"preexec_fn": os.setsid}
+
+
 def kill_process_tree(pid: int) -> None:
-    """Kill a process and all its children (best effort)."""
+    """Kill a process and all its children (best effort).
+
+    POSIX kills the process group; Windows has no process groups in that
+    sense and no ``killpg``/``SIGKILL``, so it shells out to ``taskkill``
+    with ``/T`` (tree) and ``/F`` (force) instead.
+    """
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("taskkill failed for process %d: %s", pid, exc)
+        return
+
     try:
         os.killpg(os.getpgid(pid), signal.SIGTERM)
     except (OSError, ProcessLookupError) as exc:
@@ -101,7 +150,9 @@ def run_sandboxed(
             text=True,
             env=env,
             cwd=cwd,
-            preexec_fn=os.setsid,  # New process group
+            # New process group, so a timeout can kill the whole tree.
+            # os.setsid is POSIX-only; Windows uses a creation flag.
+            **_new_process_group_kwargs(),
         )
         try:
             stdout, stderr = proc.communicate(timeout=timeout)

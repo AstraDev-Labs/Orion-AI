@@ -7,7 +7,7 @@ An orchestrator agent with code execution, file I/O, and shell access. It can wr
 ### 1. Install and initialize
 
 ```bash
-git clone https://github.com/open-orion/Orion.git
+git clone https://github.com/AstraDev-Labs/Orion-AI.git
 cd Orion
 uv sync --extra dev
 orion init --preset code-assistant

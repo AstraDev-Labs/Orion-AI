@@ -271,13 +271,18 @@ def _available_memory_gb(hw: HardwareInfo) -> float:
 
 # Explicit tier table: (max_ram_gb, model_id).
 # Walked in order — first tier where available_gb <= max_ram is chosen.
+# Qwen3.5 tiers, keyed by available memory in GB (see _available_memory_gb).
+# This table had been left on llama3.2/qwen2.5 while the function's own
+# docstring, the README and the onboarding flow all promise Qwen3.5 by
+# default -- so a new user was recommended llama3.2:3b regardless of hardware.
+# Every id here is present in BUILTIN_MODELS and supports the local engines.
 _MODEL_TIERS = [
-    (8, "llama3.2:3b"),
-    (16, "llama3.2:3b"),
-    (32, "qwen2.5:14b"),
-    (64, "qwen2.5:32b"),
+    (8, "qwen3.5:2b"),
+    (16, "qwen3.5:4b"),
+    (32, "qwen3.5:9b"),
+    (64, "qwen3.5:27b"),
 ]
-_MODEL_TIER_FALLBACK = "llama3.2:3b"
+_MODEL_TIER_FALLBACK = "qwen3.5:27b"
 _LEMONADE_DEFAULT_MODEL = "Qwen3.6-35B-A3B-GGUF"
 
 
@@ -342,6 +347,20 @@ class OllamaEngineConfig:
     """Per-engine config for Ollama."""
 
     host: str = ""
+    # Context window sent with every request. Must be the SAME for every call:
+    # Ollama reloads the whole model whenever num_ctx changes between requests,
+    # and generate/stream used to send 4096 while stream_full sent 8192, so any
+    # flow mixing them paid a full model reload (~20s cold) on each switch.
+    # 8192 keeps twice the conversation history of 4096 at the same measured
+    # accuracy, ~4% slower. Below ~4096 the system prompt plus tool schemas stop
+    # fitting and tool-choice accuracy drops (measured 3/5 at 3072).
+    num_ctx: int = 8192
+    # How long Ollama keeps the model loaded after a request. Its own default
+    # is 5 minutes, and reloading qwen3.5:4b took 9-13 s on a 4 GB laptop GPU:
+    # every reply after a short pause started that late. While Orion runs, the
+    # server also refreshes this on a timer (keep_warm) so the model stays ready.
+    keep_alive: str = "30m"
+    keep_warm: bool = True
 
 
 @dataclass(slots=True)
@@ -967,16 +986,51 @@ class AgentConfig:
 
     default_agent: str = "simple"
     max_turns: int = 10
+    # Wall-clock budget for one tool-using reply. Past it, no more tools: the
+    # agent answers with what it has. Each turn re-reads the full prompt, so
+    # 10 turns on a small local model could run for minutes with no reply.
+    max_seconds: float = 60.0
     max_history_messages: int = 10
     tools: str = ""  # comma-separated tool names
+    # Cap how many tool schemas are advertised to the model per request.
+    # Small local models mis-select badly when handed the whole catalogue
+    # (measured: qwen3.5:2b picks desktop-typing over calculator with 44
+    # tools, but calls calculator correctly with few). 0 disables routing.
+    max_tools_per_request: int = 12
     objective: str = ""  # concise purpose for routing/learning/docs
     system_prompt: str = ""  # inline system prompt (takes precedence if set)
     system_prompt_path: str = ""  # path to system prompt file (.txt, .md)
     context_from_memory: bool = True  # inject relevant memory context into prompts
+    # Every tool is enabled by default (core/tool_names.py), so the default
+    # prompt carries the rules those tools need. Kept short on purpose: the
+    # whole prompt is re-read on every model call (about 1 s per 1,000 tokens
+    # on a 4 GB laptop GPU, twice for a request that uses a tool).
     default_system_prompt: str = (
-        "You are a helpful AI assistant running locally on the user's own "
-        "hardware through Orion. You are not a cloud service. Respond "
-        "helpfully, concisely, and accurately."
+        "You are Orion, a personal AI assistant running locally on the user's own "
+        "computer, not a cloud service. Be warm and concise. Greet only at the start "
+        "of a conversation. "
+        "Call tools through tool calls, never as Python inside code_interpreter; use "
+        "code_interpreter only for real code or maths. "
+        "Do exactly what the user asked, then report back; no extra tool calls they "
+        "did not ask for. "
+        "Use web_search for news and anything current. Save study notes, brain dumps "
+        "and preferences with obsidian_write_note; recall with obsidian_search_notes. "
+        "The LIVE CONTEXT note gives the current date and time: never ask for them. "
+        "Only call system_info when asked about battery, CPU, memory, disk, network or "
+        "clipboard, and never mention system status the user did not ask about. "
+        "MESSAGES: channel_send drafts a WhatsApp/Telegram/Discord/Slack message. "
+        "EMAIL: call queue_action with action_type='email_send', payload={recipient, "
+        "subject, body}, tier='high', permission_key='email_send:'+recipient, using "
+        "the exact address given. Both only draft: show the draft in one line and ask "
+        "the user to say yes to send or no to cancel. You cannot approve your own "
+        "drafts. Never claim anything was sent unless a result says so. "
+        "PLAY a song or video with play_music or play_video (they autoplay); use "
+        "open_app only to open or browse. For 'open <browser> and search <site> for "
+        "<query>', pass the site's full search URL as open_app's target in that same "
+        "call. To operate an app the user wants to watch, focus it with "
+        "desktop_control, look with vision_capture, then use computer_control with "
+        "expect_window. When the user says they are stepping away or are back, call "
+        "away_mode. system_control shutdown and restart are disabled: never call them."
     )
 
     # Backward-compat property for old field name
@@ -1044,9 +1098,12 @@ class AnalyticsConfig:
     or hardware identifiers are ever sent. See ``docs/telemetry.md``.
     """
 
-    enabled: bool = True
-    host: str = "https://34.231.106.201.sslip.io"
-    key: str = "phc_ysKu72QaxzYNmDpHFcesD2ZZAe68zkdWJEKoYYkc5e3n"
+    # Off, with no built-in endpoint: Orion is local-first, and the defaults
+    # used to send usage events to a PostHog project Orion does not run.
+    # Nothing is sent unless a user (or a build they chose) sets all three.
+    enabled: bool = False
+    host: str = ""
+    key: str = ""
     anon_id_path: str = str(DEFAULT_CONFIG_DIR / "anon_id")
     flush_interval_seconds: int = 30
     flush_at_size: int = 100
@@ -1087,6 +1144,11 @@ class DiscordChannelConfig:
     """Per-channel config for Discord."""
 
     bot_token: str = ""
+    # The owner's own Discord user ID. In a server the bot sees every message
+    # in every channel it can read, so auto-reply must fire only when the
+    # owner is actually addressed -- otherwise Orion answers strangers'
+    # conversations. Used to detect @mentions of the owner.
+    owner_user_id: str = ""
 
 
 @dataclass(slots=True)
@@ -1217,6 +1279,10 @@ class ChannelConfig:
     enabled: bool = False
     default_channel: str = ""
     default_agent: str = "simple"
+    away_idle_minutes: float = 10.0  # OS idle time before auto-reply kicks in
+    owner_name: str = ""  # Name Orion uses when replying on the owner's behalf
+    auto_reply_enabled: bool = True  # Master switch, independent of `enabled` (which gates the connection itself)
+    auto_reply_allowlist: str = ""  # Comma-separated sender ids/JIDs; empty = everyone (current behavior)
     telegram: TelegramChannelConfig = field(default_factory=TelegramChannelConfig)
     discord: DiscordChannelConfig = field(default_factory=DiscordChannelConfig)
     slack: SlackChannelConfig = field(default_factory=SlackChannelConfig)
@@ -1259,6 +1325,9 @@ class SecurityConfig:
     mode: str = "redact"  # "redact" | "warn" | "block"
     secret_scanner: bool = True
     pii_scanner: bool = True
+    # PII redaction runs on cloud engines only; set True to also redact what
+    # you send to a local model (it cannot then see addresses you give it).
+    pii_scan_local: bool = False
     audit_log_path: str = str(DEFAULT_CONFIG_DIR / "audit.db")
     enforce_tool_confirmation: bool = True
     merkle_audit: bool = True
@@ -1422,6 +1491,26 @@ class SpeechConfig:
 
 
 @dataclass(slots=True)
+class TTSConfig:
+    """Text-to-speech settings.
+
+    Separate from SpeechConfig, which is speech-to-text only. ``allow_cloud``
+    is the local-first guarantee: with it false (the default), discovery will
+    never hand back a backend that ships text off the machine, no matter what
+    ``backend`` asks for.
+    """
+
+    backend: str = "auto"  # "auto" | chatterbox | kokoro | cartesia | elevenlabs | openai
+    voice_id: str = ""  # chatterbox: path to a reference clip; kokoro: voice name
+    speed: float = 1.0
+    device: str = "cpu"  # "auto" | "cpu" | "cuda" — cpu avoids fighting Ollama for VRAM
+    emotion: str = ""  # chatterbox preset name; empty = neutral
+    voices_dir: str = ""  # folder of reference clips, resolved by voice_id
+    allow_cloud: bool = False  # opt in before any text may leave the machine
+    output_format: str = "wav"
+
+
+@dataclass(slots=True)
 class OptimizeConfig:
     """Configuration optimization settings."""
 
@@ -1568,6 +1657,7 @@ class OrionConfig:
     a2a: A2AConfig = field(default_factory=A2AConfig)
     operators: OperatorsConfig = field(default_factory=OperatorsConfig)
     speech: SpeechConfig = field(default_factory=SpeechConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
     optimize: OptimizeConfig = field(default_factory=OptimizeConfig)
     agent_manager: AgentManagerConfig = field(default_factory=AgentManagerConfig)
     memory_files: MemoryFilesConfig = field(default_factory=MemoryFilesConfig)
@@ -1829,6 +1919,7 @@ def load_config(path: Optional[Path] = None) -> OrionConfig:
             "a2a",
             "operators",
             "speech",
+            "tts",
             "optimize",
             "agent_manager",
             "digest",
@@ -1884,7 +1975,7 @@ def generate_minimal_toml(
     else:
         engine_host_section = (
             f"\n[engine.{engine}]\n"
-            f'# host = "http://localhost:11434"  '
+            f'# host = "http://127.0.0.1:11434"  '
             f"# set to remote URL if engine runs elsewhere\n"
         )
     return f"""\
@@ -1931,7 +2022,7 @@ def generate_default_toml(
 default = "{engine}"
 
 [engine.ollama]
-host = "http://localhost:11434"
+host = "http://127.0.0.1:11434"
 
 [engine.vllm]
 host = "http://localhost:8000"
@@ -2168,6 +2259,7 @@ __all__ = [
     "SignalChannelConfig",
     "SlackChannelConfig",
     "SpeechConfig",
+    "TTSConfig",
     "StorageConfig",
     "TeamsChannelConfig",
     "TelegramChannelConfig",

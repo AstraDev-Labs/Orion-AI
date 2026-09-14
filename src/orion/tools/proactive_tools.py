@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from orion.core.registry import ToolRegistry
@@ -140,7 +141,10 @@ class QueueActionTool(BaseTool):
                 "properties": {
                     "action_type": {
                         "type": "string",
-                        "description": "Short slug, e.g. 'email_delete', 'sms_draft_reply'.",
+                        "description": (
+                            "Short slug, e.g. 'email_send', 'email_delete', 'sms_draft_reply'. "
+                            "For email_send the payload is {recipient, subject, body}."
+                        ),
                     },
                     "description": {
                         "type": "string",
@@ -173,6 +177,24 @@ class QueueActionTool(BaseTool):
 
     def execute(self, **params: Any) -> ToolResult:
         store = self._store or get_store()
+        if params.get("action_type") == "email_send":
+            # Catch a mistyped address at draft time ("example.e"), while the
+            # user is still here to correct it -- not after they said "send it".
+            from orion.tools.email_send import is_valid_address
+
+            payload = params.get("payload") or {}
+            recipient = payload.get("recipient") or payload.get("to") or ""
+            if isinstance(recipient, list):
+                recipient = recipient[0] if recipient else ""
+            if not is_valid_address(str(recipient)):
+                return ToolResult(
+                    tool_name=self.spec.name,
+                    success=False,
+                    content=(
+                        f"'{recipient}' is not a complete email address, so no draft was "
+                        "created. Ask the user to repeat the address, then queue it again."
+                    ),
+                )
         action = store.queue_action(
             action_type=params["action_type"],
             description=params["description"],
@@ -412,6 +434,14 @@ class ExecutePendingActionsTool(BaseTool):
                 return _exec_email_delete(payload)
             if atype == "email_archive":
                 return _exec_email_archive(payload)
+            if atype.startswith("tool_call:"):
+                return _exec_tool_call(payload)
+            if atype == "email_send":
+                from orion.tools.email_send import exec_email_send
+
+                return exec_email_send(payload)
+            if atype == "channel_send":
+                return _exec_channel_send(payload)
             if atype == "sms_send":
                 return _exec_sms_send(payload)
             if atype == "sms_draft_reply":
@@ -421,7 +451,23 @@ class ExecutePendingActionsTool(BaseTool):
                 return _exec_calendar_decline(payload)
             if atype == "calendar_accept":
                 return _exec_calendar_accept(payload)
-            return False, f"No executor registered for action_type '{atype}'"
+            if atype == "create_tool":
+                return _exec_create_tool(payload)
+            if atype == "install_app":
+                from orion.tools.app_install import exec_install_app
+
+                return exec_install_app(payload)
+            if atype == "install_game":
+                from orion.tools.game_install import exec_install_game
+
+                return exec_install_game(payload)
+            return False, (
+                f"No executor registered for action_type '{atype}'. This action "
+                "type has no backend implementation -- if this represents a "
+                "genuine missing capability, use propose_new_tool to draft a "
+                "real tool for it instead of queuing further actions of this "
+                "type; it needs your approval and a restart before it works."
+            )
         except Exception as exc:
             return False, str(exc)
 
@@ -457,6 +503,132 @@ def _exec_email_archive(payload: Dict[str, Any]) -> Tuple[bool, str]:
         return True, f"Archived email {msg_id}"
     except Exception as exc:
         return False, str(exc)
+
+
+_CHANNEL_CLASSES = {}
+
+
+def _get_channel_classes() -> Dict[str, Any]:
+    global _CHANNEL_CLASSES
+    if not _CHANNEL_CLASSES:
+        classes = {}
+        try:
+            from orion.channels.discord_channel import DiscordChannel
+            classes["discord"] = DiscordChannel
+        except ImportError:
+            pass
+        try:
+            from orion.channels.telegram import TelegramChannel
+            classes["telegram"] = TelegramChannel
+        except ImportError:
+            pass
+        try:
+            from orion.channels.whatsapp_baileys import WhatsAppBaileysChannel
+            classes["whatsapp"] = WhatsAppBaileysChannel
+        except ImportError:
+            pass
+        _CHANNEL_CLASSES = classes
+    return _CHANNEL_CLASSES
+
+
+def _normalize_channel_target(platform: str, target: str) -> str:
+    """Convert a human-supplied recipient into the address the channel needs.
+
+    WhatsApp addresses users as ``<countrycode><number>@s.whatsapp.net``, but
+    people (and the model relaying them) naturally write "+91 90257 00117".
+    Anything already containing "@" is assumed to be a real JID and left alone.
+    """
+    target = (target or "").strip()
+    if platform.startswith("whatsapp") and "@" not in target:
+        digits = "".join(c for c in target if c.isdigit())
+        if digits:
+            return f"{digits}@s.whatsapp.net"
+    return target
+
+
+def _exec_tool_call(payload: Dict[str, Any]) -> Tuple[bool, str]:
+    """Run a confirmation-required tool call the user approved.
+
+    Only tools whose spec requires confirmation are accepted here -- the queue
+    exists to put a human in front of those, not to become a side door that
+    runs any tool by name.
+    """
+    from orion.core.registry import ToolRegistry
+
+    name = str(payload.get("tool", ""))
+    arguments = payload.get("arguments") or {}
+    if not ToolRegistry.contains(name):
+        return False, f"Tool '{name}' is not available."
+    entry = ToolRegistry.get(name)
+    tool = entry() if isinstance(entry, type) else entry
+    if not getattr(tool.spec, "requires_confirmation", False):
+        return False, f"Tool '{name}' does not go through the approval queue."
+    try:
+        result = tool.execute(**arguments)
+    except Exception as exc:
+        return False, f"{name} failed: {exc}"
+    return bool(result.success), str(result.content)[:2000]
+
+
+def _exec_channel_send(payload: Dict[str, Any]) -> Tuple[bool, str]:
+    """Send a message via a chat platform channel (discord, telegram, whatsapp).
+
+    Only called after a human has genuinely approved the queued action via
+    parse_approval_response() — see routes.py's chat_completions hook.
+    """
+    platform = (payload.get("platform") or "").strip().lower()
+    target = payload.get("target", "")
+    content = payload.get("content", "")
+    if not platform or not target or not content:
+        return False, "Missing 'platform', 'target', or 'content' in payload"
+
+    # Prefer the connection this process already has open. Constructing a new
+    # instance works for stateless channels but cannot send on ones that own a
+    # live session (WhatsApp), and connecting a second one would fight the
+    # first for the single session WhatsApp allows.
+    from orion.channels.live import canonical_key, get_live_channel
+
+    live = get_live_channel(platform)
+    if live is not None:
+        send_target = _normalize_channel_target(platform, target)
+        try:
+            ok = live.send(send_target, content, conversation_id=send_target)
+            if ok:
+                return True, f"Sent via {platform} to {target}"
+            return False, (
+                f"{platform} is connected but the send failed. The recipient "
+                f"'{target}' may not be reachable, or the connection dropped."
+            )
+        except Exception as exc:
+            return False, f"{platform} send error: {exc}"
+
+    classes = _get_channel_classes()
+    channel_cls = classes.get(platform) or classes.get(canonical_key(platform))
+    if channel_cls is None:
+        return False, (
+            f"Platform '{platform}' is not connected. Supported: {', '.join(classes) or '(none)'}."
+        )
+
+    if platform.startswith("whatsapp"):
+        # Never construct-and-connect WhatsApp here: that would start a second
+        # bridge against the same auth and break the running connection.
+        return False, (
+            "WhatsApp isn't connected in this session, so the message was not sent. "
+            "Make sure the Orion app is running with the WhatsApp channel enabled, "
+            "then try again."
+        )
+
+    try:
+        channel = channel_cls()
+        ok = channel.send(target, content)
+        if ok:
+            return True, f"Sent via {platform} to {target}"
+        return False, (
+            f"{platform} send failed — check that its credentials are configured "
+            f"(e.g. {platform.upper()}_BOT_TOKEN)."
+        )
+    except Exception as exc:
+        return False, f"{platform} send error: {exc}"
 
 
 def _exec_sms_send(payload: Dict[str, Any]) -> Tuple[bool, str]:
@@ -503,6 +675,123 @@ def _exec_calendar_accept(payload: Dict[str, Any]) -> Tuple[bool, str]:
         return False, str(exc)
 
 
+def _add_to_agent_tools(name: str) -> None:
+    """Append `name` to agent.tools in config.toml, preserving formatting.
+
+    Mirrors config_routes.py's ``_persist``/``_enabled_tool_list`` pattern
+    exactly (including the UTF-8 read/write fix -- Windows defaults
+    str.open()/read_text() to the system codepage, which fails on this
+    file's non-ASCII bytes) rather than importing the server module, to
+    avoid a tools -> server import cycle.
+    """
+    import os
+
+    import tomlkit
+
+    from orion.core.config import DEFAULT_CONFIG_DIR
+
+    path = Path(os.environ.get("OPENORION_CONFIG", str(DEFAULT_CONFIG_DIR / "config.toml")))
+    if path.exists():
+        doc = tomlkit.parse(path.read_text(encoding="utf-8"))
+    else:
+        doc = tomlkit.document()
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    if "agent" not in doc:
+        doc.add("agent", tomlkit.table())
+    agent_table = doc["agent"]
+
+    raw = agent_table.get("tools", "")
+    # agent.tools is normally a comma-joined string, but config_routes.py's
+    # own _enabled_tool_list() also accepts a native TOML array -- handle
+    # both here too, since str(["a", "b"]) is "['a', 'b']" and blindly
+    # splitting that on commas would silently corrupt the list.
+    from orion.core.tool_names import configured_tool_list, serialize_tool_list
+
+    current = configured_tool_list(list(raw) if isinstance(raw, list) else str(raw))
+    if current is None:
+        return  # every tool is enabled, the new one included
+    if name not in current:
+        current.append(name)
+    agent_table["tools"] = serialize_tool_list(current)
+
+    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+
+
+def _exec_create_tool(payload: Dict[str, Any]) -> Tuple[bool, str]:
+    """Write an approved generated tool to disk, enable it, and restart.
+
+    Only reached from execute_pending_actions after a real human "yes" on
+    the queued create_tool action (see tool_forge.py's propose_new_tool,
+    which is what originally queued it). Re-validates the code here too --
+    defense in depth against a stale or tampered payload, since an
+    arbitrary amount of time can pass between queuing and approval.
+    """
+    from orion.tools.tool_forge import (
+        GENERATED_DIR,
+        _sandbox_smoke_test,
+        _static_validate,
+    )
+
+    name = (payload.get("name") or "").strip()
+    source = payload.get("implementation_code", "")
+    if not name or not source:
+        return False, "Payload missing 'name' or 'implementation_code'"
+
+    if ToolRegistry.contains(name):
+        return False, f"A tool named '{name}' is already registered"
+
+    ok, reason = _static_validate(name, source)
+    if not ok:
+        return False, f"Re-validation failed at approval time, nothing written: {reason}"
+
+    # The candidate code is only ever executed here, after a real human
+    # "yes" -- propose_new_tool's own validation is pure AST inspection
+    # (see tool_forge.py), never exec(). This is the actual approval
+    # boundary: nothing the model proposes runs before this point.
+    smoke_ok, smoke_detail = _sandbox_smoke_test(source)
+    if not smoke_ok:
+        return False, (
+            f"Approved, but the smoke test failed, so nothing was written: "
+            f"{smoke_detail[:300]}"
+        )
+
+    GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+    init_file = GENERATED_DIR / "__init__.py"
+    if not init_file.exists():
+        init_file.write_text('"""Generated tools."""\n', encoding="utf-8")
+
+    target = GENERATED_DIR / f"{name}.py"
+    if target.exists():
+        return False, f"{target.name} already exists on disk -- refusing to overwrite it"
+    target.write_text(source, encoding="utf-8")
+
+    try:
+        _add_to_agent_tools(name)
+    except Exception as exc:
+        return False, (
+            f"Wrote {target.name} but failed to enable it in config.toml: {exc}. "
+            "Add it to agent.tools manually, then restart Orion."
+        )
+
+    try:
+        from orion.system.self_restart import schedule_self_restart
+
+        schedule_self_restart()
+    except Exception as exc:
+        return True, (
+            f"Wrote {target.name} and enabled it in agent.tools, but could not "
+            f"schedule the automatic restart ({exc}). Restart Orion manually "
+            "to make it callable."
+        )
+
+    return True, (
+        f"Wrote {target.name}, enabled it in agent.tools, and a restart is "
+        "underway. It will be callable once the backend comes back up "
+        "(a few seconds) -- not in this turn."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Approval response parser (for channel message handlers)
 # ---------------------------------------------------------------------------
@@ -514,6 +803,23 @@ _APPROVAL_RE = re.compile(
     r"\b(?P<target2>[a-f0-9]{12}|all)\s+(?P<always2>always\s+)?(?P<decision2>yes|no|approve|deny)\b",
     re.IGNORECASE,
 )
+
+# A bare "yes"/"no" with no id/target — the whole message, nothing else.
+# Only applied when exactly one action is pending, so it can't accidentally
+# resolve the wrong one of several simultaneous drafts.
+# Bare replies to "reply yes to send, no to cancel". Voice transcripts arrive
+# capitalised and punctuated ("Yes, send it."), so both are tolerated.
+_APPROVE_WORDS = (
+    r"(?:yes|yeah|yep|yup|y|sure|approve|approved|confirm|confirmed|ok|okay|"
+    r"go ahead|do it|send it|send|yes please|please send it|yes send it|"
+    r"yes,? send it|yes,? go ahead|go for it)"
+)
+_DENY_WORDS = r"(?:no|nope|n|deny|cancel|stop|don'?t|do not send|don'?t send it|cancel it)"
+_BARE_RE = re.compile(
+    rf"^\s*(?:{_APPROVE_WORDS}|{_DENY_WORDS})\s*[.!]*\s*$",
+    re.IGNORECASE,
+)
+_BARE_APPROVE_RE = re.compile(rf"^\s*{_APPROVE_WORDS}\s*[.!]*\s*$", re.IGNORECASE)
 
 
 def parse_approval_response(
@@ -570,6 +876,25 @@ def parse_approval_response(
             processed.append(
                 {"id": target, "approved": approved, "remembered": remember}
             )
+
+    if not processed and _BARE_RE.match(text.strip()):
+        pending = s.list_pending()
+        if pending:
+            # A bare reply answers the most recent draft -- the one the user
+            # was just shown. Earlier drafts of the same kind were replaced by
+            # corrections ("the domain is example.edu"), so they are withdrawn
+            # rather than left pending where a later "yes" could send the
+            # wrong one. list_pending() is ordered oldest first.
+            action = pending[-1]
+            approved = bool(_BARE_APPROVE_RE.match(text.strip()))
+            new_status = STATUS_APPROVED if approved else STATUS_DENIED
+            s.update_status(action.id, new_status)
+            processed.append(
+                {"id": action.id, "approved": approved, "remembered": False}
+            )
+            for older in pending[:-1]:
+                if older.action_type == action.action_type:
+                    s.update_status(older.id, STATUS_DENIED)
 
     return processed
 

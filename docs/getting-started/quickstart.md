@@ -103,13 +103,13 @@ Copy one of these to `~/.orion/config.toml` to get a pre-configured setup:
 
 | Config | For | What it does |
 |--------|-----|-------------|
-| [`chat-simple.toml`](https://github.com/open-orion/Orion/blob/main/configs/orion/examples/chat-simple.toml) | Any machine | Lightweight chat, no tools -- simplest setup |
-| [`code-assistant.toml`](https://github.com/open-orion/Orion/blob/main/configs/orion/examples/code-assistant.toml) | Any machine | Orchestrator agent with code execution, file I/O, shell |
-| [`deep-research.toml`](https://github.com/open-orion/Orion/blob/main/configs/orion/examples/deep-research.toml) | Any machine | Multi-hop research across indexed documents with citations |
-| [`scheduled-monitor.toml`](https://github.com/open-orion/Orion/blob/main/configs/orion/examples/scheduled-monitor.toml) | Any machine | Persistent operative agent on a cron schedule |
-| [`morning-digest-mac.toml`](https://github.com/open-orion/Orion/blob/main/configs/orion/examples/morning-digest-mac.toml) | Mac (Apple Silicon) | Daily spoken briefing from email, calendar, health, news |
-| [`morning-digest-linux.toml`](https://github.com/open-orion/Orion/blob/main/configs/orion/examples/morning-digest-linux.toml) | Linux / GPU server | Same, with vLLM support |
-| [`morning-digest-minimal.toml`](https://github.com/open-orion/Orion/blob/main/configs/orion/examples/morning-digest-minimal.toml) | Any machine | Just Gmail + Calendar |
+| [`chat-simple.toml`](https://github.com/AstraDev-Labs/Orion/blob/main/configs/orion/examples/chat-simple.toml) | Any machine | Lightweight chat, no tools -- simplest setup |
+| [`code-assistant.toml`](https://github.com/AstraDev-Labs/Orion/blob/main/configs/orion/examples/code-assistant.toml) | Any machine | Orchestrator agent with code execution, file I/O, shell |
+| [`deep-research.toml`](https://github.com/AstraDev-Labs/Orion/blob/main/configs/orion/examples/deep-research.toml) | Any machine | Multi-hop research across indexed documents with citations |
+| [`scheduled-monitor.toml`](https://github.com/AstraDev-Labs/Orion/blob/main/configs/orion/examples/scheduled-monitor.toml) | Any machine | Persistent operative agent on a cron schedule |
+| [`morning-digest-mac.toml`](https://github.com/AstraDev-Labs/Orion/blob/main/configs/orion/examples/morning-digest-mac.toml) | Mac (Apple Silicon) | Daily spoken briefing from email, calendar, health, news |
+| [`morning-digest-linux.toml`](https://github.com/AstraDev-Labs/Orion/blob/main/configs/orion/examples/morning-digest-linux.toml) | Linux / GPU server | Same, with vLLM support |
+| [`morning-digest-minimal.toml`](https://github.com/AstraDev-Labs/Orion/blob/main/configs/orion/examples/morning-digest-minimal.toml) | Any machine | Just Gmail + Calendar |
 
 Or generate a config with digest included:
 
@@ -127,7 +127,7 @@ This guide walks through the core workflows of Orion: the browser app, CLI, Pyth
 The quickest way to experience Orion is the full chat UI running in your browser:
 
 ```bash
-git clone https://github.com/open-orion/Orion.git
+git clone https://github.com/AstraDev-Labs/Orion-AI.git
 cd Orion
 ./scripts/quickstart.sh
 ```

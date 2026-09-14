@@ -28,7 +28,6 @@ class KokoroTTSBackend(TTSBackend):
         if self._pipeline is not None:
             return
         try:
-            import torch
             from kokoro import KPipeline
 
             # Force CPU to prevent VRAM exhaustion alongside Ollama and Whisper

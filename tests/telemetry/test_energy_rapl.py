@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,13 @@ from orion.telemetry.energy_rapl import (
 from tests.telemetry.energy_test_helpers import (
     assert_close_sets_uninitialized,
     assert_sample_result_basics,
+)
+
+# RAPL is a Linux-only kernel interface, and its domain directories are
+# named "intel-rapl:0" -- a colon, which Windows forbids in filenames, so
+# even the mock sysfs tree cannot be created off Linux.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux", reason="RAPL sysfs is Linux-only"
 )
 
 _PLAT = "orion.telemetry.energy_rapl.platform.system"

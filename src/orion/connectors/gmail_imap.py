@@ -80,6 +80,8 @@ class GmailIMAPConnector(BaseConnector):
     No OAuth needed — just an email address and app password.
     """
 
+    # Reuse the Connections → Email login when it is a Gmail account.
+    _shares_email_login = True
     connector_id = "gmail_imap"
     display_name = "Gmail (IMAP)"
     auth_type = "oauth"  # Reuses credential storage pattern
@@ -109,8 +111,20 @@ class GmailIMAPConnector(BaseConnector):
         if self._email and self._password:
             return self._email, self._password
         tokens = load_tokens(self._credentials_path)
-        if tokens:
+        if tokens and tokens.get("email") and tokens.get("password"):
             return tokens.get("email", ""), tokens.get("password", "")
+        # One Gmail login for everything: the app password saved under
+        # Connections → Email also works for IMAP, so reading the inbox never
+        # asks for the same address and password a second time.
+        try:
+            from orion.core.credentials import get_tool_credential
+
+            user = (get_tool_credential("email", "EMAIL_USERNAME") or "").strip()
+            password = (get_tool_credential("email", "EMAIL_PASSWORD") or "").replace(" ", "")
+        except Exception:
+            return "", ""
+        if self._shares_email_login and user.lower().endswith(("@gmail.com", "@googlemail.com")) and password:
+            return user, password
         return "", ""
 
     def is_connected(self) -> bool:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from unittest.mock import patch
 
 from orion.tools.db_query import DatabaseQueryTool
 
@@ -196,13 +197,25 @@ class TestDatabaseQueryTool:
     def test_postgresql_url_without_psycopg2_gives_helpful_error(self):
         """When db_url is provided but psycopg2 is not installed,
         the tool should return a helpful error message."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _no_psycopg2(name, *args, **kwargs):
+            if name == "psycopg2":
+                raise ImportError("No module named 'psycopg2'")
+            return real_import(name, *args, **kwargs)
+
+        # psycopg2 is installed in this environment, so its absence has to be
+        # simulated -- previously this test only passed because the package
+        # happened to be missing, and it started failing once it was installed.
         tool = DatabaseQueryTool()
-        result = tool.execute(
-            query="SELECT 1",
-            db_url="postgresql://user:pass@localhost/testdb",
-        )
-        # psycopg2 is not installed in the test environment
-        # so we expect a helpful error
+        with patch.object(builtins, "__import__", _no_psycopg2):
+            result = tool.execute(
+                query="SELECT 1",
+                db_url="postgresql://user:pass@localhost/testdb",
+            )
+
         assert result.success is False
         assert "psycopg2" in result.content
         assert "pip install" in result.content

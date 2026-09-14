@@ -417,10 +417,14 @@ class PrivacyScanner:
 
     def run_quick(self) -> list[ScanResult]:
         """Run only critical checks: disk encryption + cloud sync agents."""
-        current_plat = "darwin" if sys.platform == "darwin" else "linux"
         quick_checks: list[Callable[[], ScanResult]]
-        if current_plat == "darwin":
+        if sys.platform == "darwin":
             quick_checks = [self.check_filevault, self.check_cloud_sync_agents]
+        elif sys.platform == "win32":
+            # No BitLocker check exists yet. Falling through to check_luks here
+            # ran a Linux-only disk-encryption probe on Windows and reported a
+            # result labelled platform="linux", which is simply wrong.
+            quick_checks = [self.check_cloud_sync_agents]
         else:
             quick_checks = [self.check_luks, self.check_cloud_sync_agents]
         results = []

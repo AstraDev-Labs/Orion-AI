@@ -1,5 +1,47 @@
 # Desktop auto-update
 
+## Windows installer builds (OrionSetup.exe)
+
+Orion installed with the Windows installer updates itself. Tauri's updater
+(below) cannot do this: it installs Tauri's NSIS/MSI bundles, a different
+package without the bundled backend or setup step.
+
+How it works (`frontend/src-tauri/src/app_update.rs`):
+
+1. 90 seconds after launch, then every 6 hours, Orion reads
+   `https://github.com/AstraDev-Labs/Orion-AI/releases/latest/download/orion-windows-update.json`
+   (`{ version, notes, url, signature }`). Users can turn this off in the tray
+   menu ("Check for updates automatically") or check by hand ("Check for updates").
+2. If that version is newer, Orion shows a Windows notification, an
+   "Update now" prompt in the app, and an "Update now" item in the tray menu.
+3. "Update now" downloads the installer, verifies its minisign signature
+   against `plugins.updater.pubkey` in `tauri.conf.json`, runs it with
+   `/SILENT /UPDATE=1` and quits. The installer keeps the install folder and
+   chosen features, reruns setup, then reopens Orion. A file whose signature
+   does not match is never saved or run.
+
+### Publishing an update
+
+1. Bump the version in `frontend/src-tauri/tauri.conf.json` (and `Cargo.toml`).
+2. Build with the signing key in the environment:
+
+   ```powershell
+   $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content path\to\orion.key -Raw
+   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = '...'   # if the key has one
+   powershell -ExecutionPolicy Bypass -File installer\build-windows.ps1 -ReleaseNotes "What changed"
+   ```
+
+   This writes `installer\dist\OrionSetup-<version>.exe`, its `.sig`, and
+   `orion-windows-update.json`.
+3. Create a GitHub release tagged `v<version>` on `AstraDev-Labs/Orion-AI` and
+   upload all three files. Installed copies offer the update within 6 hours,
+   or immediately from the tray's "Check for updates".
+
+Without the signing key the build still makes an installer, but no update
+package: installed apps only accept signed updates.
+
+## Tauri updater (other desktop builds)
+
 The Orion desktop app ships with [Tauri's updater
 plugin](https://v2.tauri.app/plugin/updater/), which checks for new
 versions on launch and every 30 minutes. When a newer signed build is
@@ -11,7 +53,7 @@ available, the app prompts the user to download and install it.
 on launch / every 30 min
         │
         ▼
-GET https://github.com/open-orion/Orion/releases/download/desktop-latest/latest.json
+GET https://github.com/AstraDev-Labs/Orion/releases/download/desktop-latest/latest.json
         │
         ▼
 Parse manifest: { "version": "X.Y.Z", "platforms": { ... } }
@@ -90,7 +132,7 @@ builds (where `import.meta.env.VITE_OPENORION_NO_UPDATER` will be
 
 ```bash
 # Download the latest manifest and confirm it parses cleanly
-curl -fsSL https://github.com/open-orion/Orion/releases/download/desktop-latest/latest.json | jq .
+curl -fsSL https://github.com/AstraDev-Labs/Orion/releases/download/desktop-latest/latest.json | jq .
 
 # Fields:
 #   version       — semver string, must match the tag (without leading "v")

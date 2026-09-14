@@ -12,7 +12,7 @@ The Orion Python SDK provides a high-level interface for interacting with local 
 ## Installation
 
 ```bash
-git clone https://github.com/open-orion/Orion.git
+git clone https://github.com/AstraDev-Labs/Orion-AI.git
 cd Orion
 uv sync
 ```

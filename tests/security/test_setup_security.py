@@ -80,3 +80,32 @@ class TestSetupSecurityDisabled:
         assert sec.engine is engine
         assert sec.capability_policy is None
         assert sec.audit_logger is None
+
+
+def _scanner_names(ctx: SecurityContext) -> set[str]:
+    return {type(s).__name__ for s in getattr(ctx.engine, "_scanners", [])}
+
+
+@pytest.mark.skipif(not _has_rust(), reason="scanners need orion_rust")
+def test_pii_redaction_skipped_for_local_engine():
+    engine = _make_mock_engine()
+    engine.engine_id = "ollama"
+    ctx = setup_security(_make_config(), engine)
+    names = _scanner_names(ctx)
+    assert "SecretScanner" in names and "PIIScanner" not in names
+
+
+@pytest.mark.skipif(not _has_rust(), reason="scanners need orion_rust")
+def test_pii_redaction_kept_for_cloud_engine():
+    engine = _make_mock_engine()
+    engine.engine_id = "cloud"
+    assert "PIIScanner" in _scanner_names(setup_security(_make_config(), engine))
+
+
+@pytest.mark.skipif(not _has_rust(), reason="scanners need orion_rust")
+def test_pii_redaction_local_opt_in():
+    engine = _make_mock_engine()
+    engine.engine_id = "ollama"
+    cfg = _make_config()
+    cfg.security.pii_scan_local = True
+    assert "PIIScanner" in _scanner_names(setup_security(cfg, engine))

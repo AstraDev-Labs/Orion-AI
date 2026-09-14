@@ -747,25 +747,105 @@ async def learning_policy(request: Request):
 
 speech_router = APIRouter(prefix="/v1/speech", tags=["speech"])
 
+# The HUD now pre-synthesizes upcoming sentences, so requests can overlap. Local
+# TTS pipelines (Kokoro, Chatterbox) keep model state and are not documented as
+# safe for concurrent calls, so synthesis runs one at a time. Throughput is
+# unchanged in practice: the next sentence still synthesizes while the current
+# one plays in the browser, which is where the inter-sentence delay came from.
+import threading as _threading
+
+_TTS_LOCK = _threading.Lock()
+
+
+def _synthesize_locked(backend, text, **kwargs):
+    with _TTS_LOCK:
+        return backend.synthesize(text, **kwargs)
+
+
+_AUDIO_MEDIA_TYPES = {
+    "wav": "audio/wav",
+    "mp3": "audio/mpeg",
+    "ogg": "audio/ogg",
+    "flac": "audio/flac",
+    "pcm": "audio/L16",
+}
+
+
 @speech_router.get("/tts")
-async def get_edge_tts(text: str, voice: str = "en-US-ChristopherNeural"):
-    """Generate high-quality TTS using edge-tts."""
+async def synthesize_speech(
+    request: Request,
+    text: str,
+    voice: str = "",
+    emotion: str = "",
+):
+    """Speak ``text`` using the configured TTS backend.
+
+    Resolved from TTSRegistry via the local-first policy in
+    ``speech/_tts_discovery.py`` -- this used to be hardwired to edge-tts,
+    which is a Microsoft *cloud* service, so every spoken sentence left the
+    machine and contradicted Orion's core guarantee. Cloud backends are now
+    opt-in behind ``tts.allow_cloud``.
+
+    Synthesis is CPU-bound model inference, so it runs in a threadpool rather
+    than blocking the event loop for the several seconds a local model takes.
+    """
+    from fastapi.responses import Response
+    from starlette.concurrency import run_in_threadpool
+
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="Query parameter 'text' is required")
+
+    backend = getattr(request.app.state, "tts_backend", None)
+    if backend is None:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                "No text-to-speech backend is available. Install a local one -- "
+                "`uv sync --extra speech-chatterbox` or `--extra speech-kokoro` -- "
+                "then set [tts] backend in ~/.orion/config.toml."
+            ),
+        )
+
+    config = getattr(request.app.state, "config", None)
+    tts_cfg = getattr(config, "tts", None)
+    fmt = (getattr(tts_cfg, "output_format", "") or "wav").lower()
+
+    kwargs = {
+        "voice_id": voice or getattr(tts_cfg, "voice_id", "") or "",
+        "speed": getattr(tts_cfg, "speed", 1.0) or 1.0,
+        "output_format": fmt,
+    }
+
+    # Only Chatterbox takes an emotion preset; passing it to a backend that
+    # does not accept the kwarg would be a TypeError, so check the signature
+    # rather than assuming which backend is loaded.
+    chosen_emotion = emotion or getattr(tts_cfg, "emotion", "") or ""
+    if chosen_emotion:
+        import inspect
+
+        try:
+            if "emotion" in inspect.signature(backend.synthesize).parameters:
+                kwargs["emotion"] = chosen_emotion
+        except (TypeError, ValueError):
+            pass
+
     try:
-        import edge_tts
-        from fastapi.responses import StreamingResponse
-
-        communicate = edge_tts.Communicate(text, voice)
-
-        async def stream_audio():
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    yield chunk["data"]
-
-        return StreamingResponse(stream_audio(), media_type="audio/mpeg")
-    except ImportError:
-        raise HTTPException(status_code=501, detail="edge-tts package not installed")
+        result = await run_in_threadpool(_synthesize_locked, backend, text, **kwargs)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("TTS synthesis failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    media_type = _AUDIO_MEDIA_TYPES.get(
+        (getattr(result, "format", "") or fmt).lower(), "application/octet-stream"
+    )
+    return Response(
+        content=result.audio,
+        media_type=media_type,
+        headers={
+            "X-TTS-Backend": getattr(backend, "backend_id", "unknown"),
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @speech_router.post("/transcribe")
@@ -781,18 +861,46 @@ async def transcribe_speech(request: Request):
         raise HTTPException(status_code=400, detail="Missing 'file' field")
 
     audio_bytes = await audio_file.read()
-    language = form.get("language")
+    # Fall back to the configured language. Leaving it unset meant Whisper
+    # auto-detected per clip, and short utterances were routinely detected as
+    # the wrong language -- "Hey Orion, can you hear me" came back as Greek,
+    # and the model then answered that garbage.
+    config = getattr(request.app.state, "config", None)
+    language = form.get("language") or getattr(getattr(config, "speech", None), "language", "") or None
 
     # Detect format from filename
     filename = getattr(audio_file, "filename", "audio.wav")
     ext = filename.rsplit(".", 1)[-1] if "." in filename else "wav"
 
+    from starlette.concurrency import run_in_threadpool
+
+    kwargs = {"format": ext, "language": language or None}
     try:
-        result = backend.transcribe(audio_bytes, format=ext, language=language or None)
+        import inspect
+
+        from orion.server.live_context import speech_prompt
+
+        if "prompt" in inspect.signature(backend.transcribe).parameters:
+            kwargs["prompt"] = speech_prompt()
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        # In a worker thread: a ~1 s transcription used to block the event
+        # loop, stalling every other request (vitals, TTS) while it ran.
+        result = await run_in_threadpool(backend.transcribe, audio_bytes, **kwargs)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    from orion.server.live_context import is_prompt_echo, normalize_transcript
+
+    text = result.text
+    if kwargs.get("prompt") and is_prompt_echo(text, kwargs["prompt"]):
+        # On quiet or unclear audio Whisper can return its own vocabulary
+        # hint as the "transcript"; one such echo was answered as a request.
+        text = ""
     return {
-        "text": result.text,
+        "text": normalize_transcript(text),
         "language": result.language,
         "confidence": result.confidence,
         "duration_seconds": result.duration_seconds,

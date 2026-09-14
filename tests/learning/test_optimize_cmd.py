@@ -95,7 +95,7 @@ class TestOptimizeConfig:
     """Tests for OptimizeConfig in OrionConfig."""
 
     def test_optimize_config_in_orion_config(self):
-        from orion.core.config import OrionConfig, OptimizeConfig
+        from orion.core.config import OptimizeConfig, OrionConfig
 
         cfg = OrionConfig()
         assert isinstance(cfg.optimize, OptimizeConfig)

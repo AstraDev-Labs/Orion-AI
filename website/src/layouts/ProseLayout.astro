@@ -1,0 +1,23 @@
+---
+import SiteLayout from './SiteLayout.astro';
+
+interface Props {
+  frontmatter?: { title: string; description: string; eyebrow?: string; updated?: string };
+  title?: string;
+  description?: string;
+  eyebrow?: string;
+  updated?: string;
+}
+
+const fm = Astro.props.frontmatter ?? (Astro.props as Required<Pick<Props, 'title' | 'description'>> & Props);
+---
+
+<SiteLayout title={fm.title} description={fm.description}>
+  <article class="container-site max-w-3xl pb-10 pt-16 sm:pt-20">
+    {fm.eyebrow && <p class="eyebrow mb-4">{fm.eyebrow}</p>}
+    <div class="prose-site">
+      <slot />
+    </div>
+    {fm.updated && <p class="mt-12 text-xs text-[var(--color-faint)]">Last updated {fm.updated}</p>}
+  </article>
+</SiteLayout>

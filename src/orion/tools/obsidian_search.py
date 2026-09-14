@@ -58,7 +58,7 @@ class ObsidianSearchNotesTool(BaseTool):
             if not config_path.exists():
                 return ToolResult(
                     tool_name="obsidian_search_notes",
-                    content="Obsidian connector not configured. No vault path found. Please run 'orion connectors connect obsidian' first.",
+                    content="Obsidian connector not configured. No vault path found. Link your vault in Connections (HUD, key C) → Obsidian vault.",
                     success=False
                 )
 

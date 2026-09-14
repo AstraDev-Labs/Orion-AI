@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://astradev-labs.github.io/Orion-AI/sitemap-index.xml

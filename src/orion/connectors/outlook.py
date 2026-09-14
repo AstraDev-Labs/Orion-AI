@@ -27,6 +27,7 @@ class OutlookConnector(GmailIMAPConnector):
     connector_id = "outlook"
     display_name = "Outlook / Microsoft 365"
     _default_imap_host = "outlook.office365.com"
+    _shares_email_login = False  # the shared login is Gmail-only
 
     def __init__(
         self,

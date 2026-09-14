@@ -78,6 +78,12 @@ except ImportError:
     pass
 
 try:
+    import orion.tools.browser  # noqa: F401
+    import orion.tools.browser_axtree  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import orion.tools.docker_shell_exec  # noqa: F401
     import orion.tools.shell_exec  # noqa: F401
 except ImportError:
@@ -166,5 +172,97 @@ try:
     import orion.tools.play_video  # noqa: F401
 except ImportError:
     pass
+
+try:
+    import orion.tools.vision_capture  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.system_control  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.reminders  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.desktop_control  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.open_app  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.proactive_tools  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.away_mode  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.computer_control  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.system_info  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.tool_forge  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.app_install  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.game_install  # noqa: F401
+except ImportError:
+    pass
+
+# Generated tools land here after a user approves propose_new_tool
+# (see tool_forge.py / proactive_tools.py's create_tool executor). Each
+# file registers itself via the normal @ToolRegistry.register decorator,
+# so no further edits to this file are ever needed for future generated
+# tools -- only this one-time glob loader.
+#
+# Gated behind ORION_LOAD_GENERATED_TOOLS (set by cli/serve.py before this
+# package is imported) so that AI-authored, approved code only actually
+# runs in the real server process it was approved for -- not in every test
+# suite, one-off script, or unrelated CLI subcommand that happens to import
+# orion.tools (which would otherwise execute each generated tool's
+# module-level code too, well past the boundary the rest of this feature's
+# approval-gating assumes).
+import os as _os
+
+if _os.environ.get("ORION_LOAD_GENERATED_TOOLS") == "1":
+    import importlib
+    import logging as _logging
+    from pathlib import Path as _Path
+
+    _logger = _logging.getLogger(__name__)
+    _generated_dir = _Path(__file__).parent / "generated"
+    if _generated_dir.is_dir():
+        for _py_file in sorted(_generated_dir.glob("*.py")):
+            if _py_file.stem.startswith("_"):
+                continue
+            _module_name = f"orion.tools.generated.{_py_file.stem}"
+            try:
+                importlib.import_module(_module_name)
+            except Exception:
+                _logger.exception("Failed to load generated tool module %s", _module_name)
 
 __all__ = ["BaseTool", "ToolExecutor", "ToolSpec"]

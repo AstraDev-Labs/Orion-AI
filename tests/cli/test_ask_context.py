@@ -35,7 +35,7 @@ def test_get_memory_backend_returns_backend_even_when_empty(
     which is the kind of ambiguity that leads to silent grounding
     failures downstream.
     """
-    from orion.core.config import OrionConfig, MemoryConfig
+    from orion.core.config import MemoryConfig, OrionConfig
     from orion.core.registry import MemoryRegistry
     from orion.tools.storage.sqlite import SQLiteMemory
 
@@ -61,7 +61,7 @@ def test_get_memory_backend_returns_backend_with_docs(
     monkeypatch,
 ):
     """_get_memory_backend returns a backend when docs exist."""
-    from orion.core.config import OrionConfig, MemoryConfig
+    from orion.core.config import MemoryConfig, OrionConfig
     from orion.core.registry import MemoryRegistry
     from orion.tools.storage.sqlite import SQLiteMemory
 

@@ -45,6 +45,11 @@ def _make_engine(key: str, config: OrionConfig) -> InferenceEngine:
             num_threads=cfg.num_threads,
         )
 
+    # ollama: host plus the one context window every request must share
+    if key == "ollama":
+        cfg = config.engine.ollama
+        return cls(host=cfg.host or None, num_ctx=cfg.num_ctx, keep_alive=cfg.keep_alive)
+
     # nvidia: pass host and api_key
     if key == "nvidia":
         cfg = config.engine.nvidia
@@ -187,14 +192,54 @@ def get_engine(
             continue
         try:
             engine = _make_engine(key, config)
+        except Exception as exc:
+            logger.debug("Engine %r could not be constructed: %s", key, exc)
+            continue
+        if _healthy_with_retry(key, engine):
+            return (key, engine)
+
+    # Fallback to another healthy *local* engine. Cloud engines are never
+    # picked automatically: litellm's health() only checks that the package
+    # imports, so it always "passed", and a server whose Ollama was merely busy
+    # at boot came up routed through litellm -- reporting healthy while every
+    # chat request failed with "LLM Provider NOT provided". Silently switching
+    # a local-first assistant to a cloud router is never an acceptable fallback;
+    # a cloud engine runs only when chosen explicitly (engine_key or default).
+    healthy = [
+        (k, e) for k, e in discover_engines(config) if k not in _CLOUD_ENGINES
+    ]
+    if healthy:
+        logger.warning(
+            "Requested engine(s) %s unavailable; falling back to local engine %r",
+            keys_to_try,
+            healthy[0][0],
+        )
+        return healthy[0]
+    return None
+
+
+# Engines that send requests off the machine. Never chosen as a fallback.
+_CLOUD_ENGINES = frozenset({"cloud", "litellm", "nvidia"})
+
+# A local engine that is busy (e.g. Ollama loading a model) can miss a single
+# 2-second health probe; retry briefly before concluding it is down.
+_HEALTH_ATTEMPTS = 5
+_HEALTH_RETRY_DELAY = 2.0
+
+
+def _healthy_with_retry(key: str, engine: InferenceEngine) -> bool:
+    import time
+
+    for attempt in range(1, _HEALTH_ATTEMPTS + 1):
+        try:
             if engine.health():
-                return (key, engine)
+                return True
         except Exception as exc:
             logger.debug("Engine %r health check failed: %s", key, exc)
-
-    # Fallback to any healthy engine
-    healthy = discover_engines(config)
-    return healthy[0] if healthy else None
+        if attempt < _HEALTH_ATTEMPTS:
+            time.sleep(_HEALTH_RETRY_DELAY)
+    logger.warning("Engine %r did not become healthy after %d attempts", key, _HEALTH_ATTEMPTS)
+    return False
 
 
 __all__ = ["discover_engines", "discover_models", "get_engine"]
