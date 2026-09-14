@@ -24,7 +24,7 @@ export const NAV = [
   { label: 'Requirements', href: '/system-requirements' },
   { label: 'Docs', href: '/docs' },
   { label: 'Security', href: '/security' },
-  { label: 'About', href: '/about' },
+  { label: 'Team', href: '/team' },
 ];
 
 export const FOOTER = [
@@ -42,7 +42,7 @@ export const FOOTER = [
     links: [
       { label: 'Documentation', href: '/docs' },
       { label: 'FAQ', href: '/faq' },
-      { label: 'Developers', href: '/developers' },
+      { label: 'Developer guide', href: '/developers' },
       { label: 'Press kit', href: '/press' },
     ],
   },
@@ -50,6 +50,7 @@ export const FOOTER = [
     title: 'Community',
     links: [
       { label: 'About', href: '/about' },
+      { label: 'Developers & Team', href: '/team' },
       { label: 'Feature wishlist', href: '/wishlist' },
       { label: 'Contact', href: '/contact' },
     ],
