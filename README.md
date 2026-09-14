@@ -43,6 +43,8 @@ Most "personal" AI assistants send every request through someone else's servers.
 
 ## Download and install
 
+**Just want to use Orion? Download the installer.** No coding, no terminal, no extra tools: setup installs everything Orion needs.
+
 1. Download **`OrionSetup-<version>.exe`** from [GitHub Releases](https://github.com/AstraDev-Labs/Orion-AI/releases) or the Orion website.
 2. Run it. The alpha installer isn't code-signed yet, so Windows SmartScreen shows *"Windows protected your PC"*. Choose **More info → Run anyway**.
 3. Accept the terms, choose an install folder and features, and click **Install**.
@@ -61,7 +63,7 @@ No administrator rights are needed. Updates arrive in the app: Orion notifies yo
 | **Graphics** | Not required | NVIDIA GPU with 4 GB+ |
 | **Internet** | Required during setup | Broadband |
 
-Not sure? The system requirements page on the Orion website checks the PC you're on, right in your browser. macOS and Linux have no installer yet; you can [build from source](#build-from-source).
+Not sure? The system requirements page on the Orion website checks the PC you're on, right in your browser. macOS and Linux have no installer yet; developers can [build from source](#build-from-source).
 
 ## Privacy
 
@@ -76,7 +78,16 @@ The full terms of use and privacy policy are in [installer/windows/terms-and-pri
 > [!CAUTION]
 > Orion's WhatsApp connection uses an unofficial WhatsApp Web client. WhatsApp doesn't endorse it, and using it may break WhatsApp's terms and put your account at risk.
 
-## Build from source
+## For developers
+
+You only need this to change Orion's code. To use Orion, [download the installer](#download-and-install) instead.
+
+### Build from source
+
+<details>
+<summary>Run Orion from source, or build the installer yourself</summary>
+
+<br>
 
 You need [uv](https://docs.astral.sh/uv/), [Ollama](https://ollama.com), and for the desktop app [Rust](https://rustup.rs) and [Node.js](https://nodejs.org) 20+.
 
@@ -103,7 +114,9 @@ Windows installer (needs [Inno Setup](https://jrsoftware.org/isinfo.php)):
 powershell -ExecutionPolicy Bypass -File installer\build-windows.ps1
 ```
 
-## Project layout
+</details>
+
+### Project layout
 
 | Path | What's there |
 | --- | --- |
