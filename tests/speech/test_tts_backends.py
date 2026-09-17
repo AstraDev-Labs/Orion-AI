@@ -121,3 +121,64 @@ def test_english_speech_uses_english_whisper_model():
     assert whisper_model_for("base", "ta") == "base"
     assert whisper_model_for("large-v3", "en") == "large-v3"  # no English-only variant
     assert whisper_model_for("base.en", "en") == "base.en"
+
+
+# ---------------------------------------------------------------------------
+# Backend discovery
+# ---------------------------------------------------------------------------
+
+
+def _config(backend: str = "auto", allow_cloud: bool = False):
+    from orion.core.config import OrionConfig
+
+    cfg = OrionConfig()
+    cfg.tts.backend = backend
+    cfg.tts.allow_cloud = allow_cloud
+    return cfg
+
+
+def _installed(monkeypatch, *packages: str):
+    from orion.speech import _tts_discovery
+    from orion.speech.chatterbox_tts import ChatterboxTTSBackend
+    from orion.speech.kokoro_tts import KokoroTTSBackend
+
+    # The registry is cleared between tests; register both local voices.
+    TTSRegistry.register_value("kokoro", KokoroTTSBackend)
+    TTSRegistry.register_value("chatterbox", ChatterboxTTSBackend)
+    monkeypatch.setattr(
+        _tts_discovery,
+        "_package_installed",
+        lambda key: key not in _tts_discovery._LOCAL_PACKAGES or key in packages,
+    )
+
+
+def test_auto_skips_chatterbox_when_only_kokoro_is_installed(monkeypatch):
+    from orion.speech._tts_discovery import get_tts_backend
+    from orion.speech.kokoro_tts import KokoroTTSBackend
+
+    _installed(monkeypatch, "kokoro")
+    assert isinstance(get_tts_backend(_config()), KokoroTTSBackend)
+
+
+def test_auto_prefers_kokoro_when_both_are_installed(monkeypatch):
+    from orion.speech._tts_discovery import get_tts_backend
+    from orion.speech.kokoro_tts import KokoroTTSBackend
+
+    _installed(monkeypatch, "kokoro", "chatterbox")
+    assert isinstance(get_tts_backend(_config()), KokoroTTSBackend)
+
+
+def test_missing_configured_local_voice_falls_back_to_installed_one(monkeypatch):
+    from orion.speech._tts_discovery import get_tts_backend
+    from orion.speech.kokoro_tts import KokoroTTSBackend
+
+    _installed(monkeypatch, "kokoro")
+    assert isinstance(get_tts_backend(_config("chatterbox")), KokoroTTSBackend)
+
+
+def test_no_local_voice_installed_never_falls_back_to_cloud(monkeypatch):
+    from orion.speech._tts_discovery import get_tts_backend
+
+    _installed(monkeypatch)
+    assert get_tts_backend(_config()) is None
+    assert get_tts_backend(_config("chatterbox")) is None

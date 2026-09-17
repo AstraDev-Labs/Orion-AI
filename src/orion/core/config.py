@@ -2090,9 +2090,21 @@ enabled = true
 # viewport_height = 720
 
 [server]
-host = "0.0.0.0"
+host = "127.0.0.1"             # this computer only; do not expose Orion to the network
 port = 8000
 agent = "orchestrator"
+
+[speech]
+backend = "faster-whisper"
+model = "base"
+language = "en"                # English uses Whisper's more accurate base.en model
+device = "cpu"
+compute_type = "int8"
+
+[tts]
+backend = "kokoro"             # local voice installed with Orion
+voice_id = "af_heart"
+device = "cpu"
 
 [learning]
 enabled = false
