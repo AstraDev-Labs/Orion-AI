@@ -21,6 +21,17 @@ def test_uninstaller_removes_private_models_from_older_installs():
         "Remove-Tree $modelsDir"
     )
     assert "DirExists(App + '\\models\\ollama')" in inno
+    assert "Get-LegacyOrionModels" in uninstall
+    assert "Remove-LegacyVoiceCaches" in uninstall
+    assert "LegacyOrionModelsPresent" in inno
+    assert "LegacyOrionVoicePresent" in inno
+
+
+def test_uninstaller_cleans_residual_app_folders_after_all_parts_are_removed():
+    uninstall = UNINSTALL_SCRIPT.read_text(encoding="utf-8")
+    assert "'app-settings.json'" in uninstall
+    assert "@('runtime', 'models', 'tools')" in uninstall
+    assert "for ($attempt = 1; $attempt -le 6; $attempt++)" in uninstall
 
 
 def test_windows_uninstaller_has_valid_powershell_syntax():

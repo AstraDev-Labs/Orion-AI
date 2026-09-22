@@ -328,6 +328,25 @@ begin
   Result := Pos(',' + Lowercase(Item) + ',', ',' + Lowercase(List) + ',') > 0;
 end;
 
+function LegacyOrionModelsPresent(): Boolean;
+var
+  Root: String;
+begin
+  Root := ExpandConstant('{%USERPROFILE}') + '\.ollama\models\manifests\registry.ollama.ai\library\';
+  Result := DirExists(Root + 'qwen3') or DirExists(Root + 'qwen3.5') or
+    DirExists(Root + 'nomic-embed-text') or DirExists(Root + 'moondream');
+end;
+
+function LegacyOrionVoicePresent(): Boolean;
+var
+  Root: String;
+begin
+  Root := ExpandConstant('{%USERPROFILE}') + '\.cache\huggingface\hub\';
+  Result := DirExists(Root + 'models--hexgrad--Kokoro-82M') or
+    DirExists(Root + 'models--Systran--faster-whisper-base') or
+    DirExists(Root + 'models--Systran--faster-whisper-base.en');
+end;
+
 function FeatureSummary(): String;
 var
   Raw: AnsiString;
@@ -387,13 +406,13 @@ begin
     Hints[1] := 'Everything in ' + ModelsDir
   else
     Hints[1] := Pulled;
-  Shown[1] := (Pulled <> '') or ((ModelsDir <> '') and DirExists(ModelsDir));
+  Shown[1] := (Pulled <> '') or ((ModelsDir <> '') and DirExists(ModelsDir)) or LegacyOrionModelsPresent();
   Defaults[1] := True;
 
   Keys[2] := 'voice';
   Captions[2] := 'Speech recognition and voice models';
   Hints[2] := 'Whisper and Kokoro, about 500 MB';
-  Shown[2] := DirExists(App + '\models\huggingface');
+  Shown[2] := DirExists(App + '\models\huggingface') or LegacyOrionVoicePresent();
   Defaults[2] := True;
 
   Keys[3] := 'engine';
