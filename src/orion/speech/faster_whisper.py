@@ -127,10 +127,13 @@ class FasterWhisperBackend(SpeechBackend):
             )
 
         errors: list[str] = []
+        from orion.speech._model_files import local_whisper_path
+
+        model_path = local_whisper_path(self._model_size) or self._model_size
         for device, compute_type in self._model_candidates():
             try:
                 model = model_cls(
-                    self._model_size,
+                    model_path,
                     device=device,
                     compute_type=compute_type,
                 )

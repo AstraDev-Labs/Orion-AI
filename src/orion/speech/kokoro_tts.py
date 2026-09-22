@@ -28,11 +28,34 @@ class KokoroTTSBackend(TTSBackend):
         if self._pipeline is not None:
             return
         try:
-            from kokoro import KPipeline
+            from kokoro import KModel, KPipeline
+
+            from orion.speech._model_files import (
+                KOKORO_REPO,
+                KOKORO_WEIGHTS,
+                local_kokoro_directory,
+            )
 
             # Force CPU to prevent VRAM exhaustion alongside Ollama and Whisper
             device = "cpu"
-            self._pipeline = KPipeline(lang_code="a", device=device)
+            directory = local_kokoro_directory()
+            if directory is not None:
+                model = (
+                    KModel(
+                        repo_id=KOKORO_REPO,
+                        config=str(directory / "config.json"),
+                        model=str(directory / KOKORO_WEIGHTS),
+                    )
+                    .to(device)
+                    .eval()
+                )
+                self._pipeline = KPipeline(
+                    lang_code="a", device=device, repo_id=KOKORO_REPO, model=model
+                )
+            else:
+                self._pipeline = KPipeline(
+                    lang_code="a", device=device, repo_id=KOKORO_REPO
+                )
         except ImportError:
             raise RuntimeError(
                 "kokoro package not installed. Install with: pip install kokoro"
@@ -49,7 +72,11 @@ class KokoroTTSBackend(TTSBackend):
         self._ensure_pipeline()
         if not voice_id:
             voice_id = "af_heart"
-        for _, _, audio in self._pipeline(text, voice=voice_id, speed=speed):
+        from orion.speech._model_files import local_kokoro_voice
+
+        for _, _, audio in self._pipeline(
+            text, voice=local_kokoro_voice(voice_id), speed=speed
+        ):
             yield audio
 
     def synthesize(

@@ -453,6 +453,9 @@ function Install-Ollama {
         Set-Record 'ollama_models_dir' $script:OllamaModels
     }
     if (-not $script:Ollama) {
+        $ollamaNotice = 'Ollama installation may take about 5 to 10 minutes. Please do not close this window.'
+        Write-Info $ollamaNotice
+        Set-Status 3 'Local AI engine (Ollama)' $ollamaNotice
         $setup = Join-Path $env:TEMP 'OllamaSetup.exe'
         Save-Download 'https://ollama.com/download/OllamaSetup.exe' $setup 'Ollama (about 1 GB)'
         $sig = Get-AuthenticodeSignature -FilePath $setup
@@ -648,7 +651,7 @@ function Initialize-Voice {
     # Prints each stage as it starts, so a slow download never looks frozen,
     # and records results in setup.log itself (its output is not captured).
     $warm = @'
-import os, sys, time, warnings
+import os, sys, time, traceback, warnings
 warnings.filterwarnings("ignore")
 LOG = os.environ.get("ORION_SETUP_LOG", "")
 
@@ -664,28 +667,36 @@ def say(message):
 ok = True
 try:
     say("Loading speech tools...")
-    from faster_whisper import WhisperModel
     from orion.core.config import load_config
     from orion.speech._discovery import whisper_model_for
+    from orion.speech._model_files import prepare_whisper
+    from orion.speech.faster_whisper import FasterWhisperBackend
     speech = load_config().speech
     # The model Orion will actually load (base.en when speech is English).
     name = whisper_model_for(speech.model, speech.language)
     say("Downloading speech recognition (Whisper " + name + ", about 150 MB)...")
-    WhisperModel(name, device="cpu", compute_type="int8")
+    prepare_whisper(name, say)
+    stt = FasterWhisperBackend(model_size=name, device="cpu", compute_type="int8")
+    stt._ensure_model()
     say("Speech recognition ready")
 except Exception as exc:
     ok = False
     say("Speech recognition not prepared: " + str(exc))
+    say(traceback.format_exc())
 try:
     say("Loading the voice engine (this can take a minute)...")
-    from kokoro import KPipeline
+    from orion.speech._model_files import prepare_kokoro
+    from orion.speech.kokoro_tts import KokoroTTSBackend
     say("Downloading Orion's voice (Kokoro, about 330 MB)...")
-    pipe = KPipeline(lang_code="a", device="cpu", repo_id="hexgrad/Kokoro-82M")
-    list(pipe("Ready.", voice="af_heart"))
+    prepare_kokoro(say)
+    result = KokoroTTSBackend(device="cpu").synthesize("Ready.", voice_id="af_heart")
+    if not result.audio or result.duration_seconds <= 0:
+        raise RuntimeError("The voice engine produced no audio")
     say("Voice ready")
 except Exception as exc:
     ok = False
     say("Voice not prepared: " + str(exc))
+    say(traceback.format_exc())
 sys.exit(0 if ok else 3)
 '@
     $warmFile = Join-Path $env:TEMP 'orion-warm-voice.py'
@@ -712,12 +723,10 @@ sys.exit(0 if ok else 3)
     }
     Remove-Item $warmFile -Force -ErrorAction SilentlyContinue
     Write-Log "  voice warm-up exit code $code"
-    if ($code -eq 0) {
-        Write-Ok 'Voice models ready'
-    } else {
-        # Not fatal: Orion downloads anything missing the first time it listens or speaks.
-        Write-Host '      Voice models are not fully downloaded yet. Orion will finish downloading them the first time it listens or speaks.' -ForegroundColor Yellow
+    if ($code -ne 0) {
+        throw "Voice models could not be prepared (exit code $code). See $LogFile and run setup again."
     }
+    Write-Ok 'Voice models ready'
 }
 
 function Save-InstallInfo {

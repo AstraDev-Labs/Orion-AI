@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-09-21
+
+### Fixed
+
+- Windows voice setup downloads Whisper and Kokoro into ordinary local folders,
+  verifies their files, and tests model loading and speech generation before
+  reporting success. The app reuses those files, including its four Kokoro voices.
+- Failed voice downloads retry and include full error details in `setup.log`.
+
+### Changed
+
+- Step 3 explains that Ollama installation may take about 5 to 10 minutes and
+  asks users to keep the setup window open.
+
 ## [1.0.1] - 2026-05-17
 
 A patch release that closes the auto-update gap so the analytics
