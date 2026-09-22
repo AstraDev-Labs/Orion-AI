@@ -135,6 +135,10 @@ def build_live_context(
                 "complete, natural sentence. Never output only a name, punctuation, a label, "
                 "or prompt text."
             ),
+            (
+                "When the user says Orion in a greeting, they are addressing you. Do not echo "
+                "that greeting back or use your own name as the reply."
+            ),
         ]
         if name:
             lines.append(

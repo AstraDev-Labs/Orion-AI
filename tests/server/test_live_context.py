@@ -65,6 +65,7 @@ def test_short_social_context_is_minimal_and_profile_name_is_normalized(tmp_path
     assert "Operating system" not in note
     assert "only a name" in note
     assert "Yogaraj" in note
+    assert "addressing you" in note
 
 
 def test_short_social_turn_detection_is_narrow():

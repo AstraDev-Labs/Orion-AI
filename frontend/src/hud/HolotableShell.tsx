@@ -392,17 +392,12 @@ export function HolotableShell() {
     return () => window.removeEventListener('keydown', handler);
   }, [paletteOpen]);
 
-  const activeScreen = useMemo(() => {
+  // Keep The Core mounted while the user examines another section. A chat
+  // stream owns local state for its partial text, timers and speech queue;
+  // unmounting it mid-reply made navigation look like the answer had been cut
+  // off. `hidden` removes it from view without destroying that in-flight work.
+  const detailScreen = useMemo(() => {
     switch (screen) {
-      case 'core':
-        return (
-          <CoreScreen
-            onStreamingChange={setStreaming}
-            onFiringRateChange={setFiringRate}
-            voiceInput={voiceInput}
-            onSpeakingChange={setSpeaking}
-          />
-        );
       case 'discourse':
         return <DiscourseScreen />;
       case 'delegates':
@@ -428,7 +423,7 @@ export function HolotableShell() {
       default:
         return null;
     }
-  }, [screen, voiceInput]);
+  }, [screen]);
 
   return (
     <div className="holo-root" style={{ display: 'flex', flexDirection: 'column', padding: 15, gap: 13, boxSizing: 'border-box' }}>
@@ -602,7 +597,17 @@ export function HolotableShell() {
           <ConduitsPanel onOpen={() => setScreen('connections')} />
         </aside>
 
-        <section style={{ minHeight: 0, position: 'relative' }}>{activeScreen}</section>
+        <section style={{ minHeight: 0, position: 'relative' }}>
+          <div hidden={screen !== 'core'} style={{ position: 'absolute', inset: 0 }}>
+            <CoreScreen
+              onStreamingChange={setStreaming}
+              onFiringRateChange={setFiringRate}
+              voiceInput={voiceInput}
+              onSpeakingChange={setSpeaking}
+            />
+          </div>
+          {detailScreen}
+        </section>
 
         <aside
           style={{

@@ -58,7 +58,7 @@ _SOCIAL_REPLY_WORDS = frozenset(
 )
 
 
-def _social_reply_problem(content: str) -> str | None:
+def _social_reply_problem(content: str, user_text: str = "") -> str | None:
     """Describe why a short-social reply is unusable, otherwise return ``None``.
 
     The check deliberately rejects malformed output instead of prescribing an
@@ -68,6 +68,15 @@ def _social_reply_problem(content: str) -> str | None:
     words = re.findall(r"[A-Za-z0-9']+", text.lower())
     if not words:
         return "it was empty or only punctuation"
+    user_words = re.findall(r"[A-Za-z0-9']+", (user_text or "").lower())
+    # “Hey Orion” addresses the assistant. Some small local models repeat it
+    # verbatim, treating Orion as the user's name. Compare normalized words so
+    # punctuation and capitalization cannot turn that echo into a valid reply.
+    if user_words and words == user_words:
+        return "it merely echoed the user's greeting instead of answering it"
+    address_only_words = _SOCIAL_REPLY_WORDS | {"orion", "there"}
+    if "orion" in words and set(words).issubset(address_only_words):
+        return "it addressed the assistant by its own name instead of replying"
     prompt_markers = ("live context", "user profile", "system prompt")
     if any(marker in text.lower() for marker in prompt_markers):
         return "it exposed prompt text"
@@ -93,7 +102,7 @@ def _social_retry_messages(messages: list[Message], problem: str) -> list[Messag
 
 
 def _generate_adaptive_social_reply(
-    engine, model: str, req: ChatCompletionRequest
+    engine, model: str, req: ChatCompletionRequest, user_text: str = ""
 ) -> dict[str, Any]:
     """Generate a social reply, retrying malformed drafts before they reach the user."""
     messages = _to_messages(req.messages)
@@ -106,7 +115,7 @@ def _generate_adaptive_social_reply(
             max_tokens=req.max_tokens,
         )
         last_result = result
-        problem = _social_reply_problem(str(result.get("content", "")))
+        problem = _social_reply_problem(str(result.get("content", "")), user_text)
         if problem is None:
             return result
         messages = _social_retry_messages(messages, problem)
@@ -114,7 +123,7 @@ def _generate_adaptive_social_reply(
 
 
 def _retry_adaptive_social_reply(
-    engine, model: str, req: ChatCompletionRequest, problem: str
+    engine, model: str, req: ChatCompletionRequest, problem: str, user_text: str = ""
 ) -> dict[str, Any]:
     """Regenerate after a streamed social draft has failed validation."""
     messages = _social_retry_messages(_to_messages(req.messages), problem)
@@ -127,7 +136,7 @@ def _retry_adaptive_social_reply(
             max_tokens=req.max_tokens,
         )
         last_result = result
-        retry_problem = _social_reply_problem(str(result.get("content", "")))
+        retry_problem = _social_reply_problem(str(result.get("content", "")), user_text)
         if retry_problem is None:
             return result
         messages = _social_retry_messages(messages, retry_problem)
@@ -542,7 +551,11 @@ def _handle_direct(
     if req.tools:
         kwargs["tools"] = req.tools
     if social_guard:
-        result = _generate_adaptive_social_reply(engine, model, req)
+        user_text = next(
+            (m.content for m in reversed(req.messages) if m.role == "user" and m.content),
+            "",
+        )
+        result = _generate_adaptive_social_reply(engine, model, req, user_text)
     elif bus:
         from orion.telemetry.wrapper import instrumented_generate
 
@@ -728,13 +741,13 @@ async def _handle_adaptive_social_stream(
     content = "".join(candidate_tokens)
     usage: dict[str, Any] = {}
     finish_reason = "stop"
-    problem = _social_reply_problem(content)
+    problem = _social_reply_problem(content, raw_user_query)
     if problem is not None:
         from starlette.concurrency import run_in_threadpool
 
         try:
             result = await run_in_threadpool(
-                _retry_adaptive_social_reply, engine, model, req, problem
+                _retry_adaptive_social_reply, engine, model, req, problem, raw_user_query
             )
         except Exception:
             logging.getLogger("orion.server").warning(

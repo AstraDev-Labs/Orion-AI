@@ -277,6 +277,44 @@ class TestChatCompletions:
             for message in retry_messages
         )
 
+    def test_addressed_greeting_retries_a_model_echo(self):
+        engine = _make_engine()
+
+        async def echoed_stream(messages, *args, **kwargs):
+            yield "Hey Orion"
+
+        engine.stream = echoed_stream
+        engine.generate.return_value = {
+            "content": "Hi! What would you like to do?",
+            "usage": {"prompt_tokens": 7, "completion_tokens": 7, "total_tokens": 14},
+            "finish_reason": "stop",
+        }
+        client = TestClient(create_app(engine, "test-model"))
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "Hey Orion"}],
+                "stream": True,
+            },
+        )
+
+        assert resp.status_code == 200
+        content = ""
+        for line in resp.text.strip().split("\n"):
+            if line.startswith("data:") and "[DONE]" not in line:
+                data = json.loads(line[5:].strip())
+                content += (
+                    data.get("choices", [{}])[0].get("delta", {}).get("content") or ""
+                )
+        assert content == "Hi! What would you like to do?"
+        retry_messages = engine.generate.call_args.args[0]
+        assert any(
+            "merely echoed the user's greeting" in message.content
+            for message in retry_messages
+        )
+
     def test_finish_reason_default(self, client):
         resp = client.post(
             "/v1/chat/completions",
