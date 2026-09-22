@@ -41,6 +41,11 @@
 
 .PARAMETER NoPause
     Don't wait for a key press or show the picker (silent and automatic runs).
+
+.PARAMETER Update
+    Update a completed Orion installation. This refreshes the shipped backend,
+    Python environment and compiled extension while keeping the AI engine,
+    downloaded models, voice files, settings and chosen features.
 #>
 [CmdletBinding()]
 param(
@@ -50,7 +55,8 @@ param(
     [string]$InstallRoot = '',
     [string]$StatusFile = '',
     [string]$Features = '',
-    [switch]$NoPause
+    [switch]$NoPause,
+    [switch]$Update
 )
 
 $ErrorActionPreference = 'Stop'
@@ -745,6 +751,65 @@ function Save-InstallInfo {
     $info | ConvertTo-Json | Set-Content -Path (Join-Path $InstallRoot 'install.json') -Encoding UTF8
 }
 
+function Save-UpdatedInstallInfo {
+    # Preserve the machine-specific details from the first setup. An update
+    # knows the new runtime paths but does not need to rediscover Ollama,
+    # models or voice assets, and must not blank those saved values.
+    $path = Join-Path $InstallRoot 'install.json'
+    $info = [ordered]@{}
+    try {
+        $previous = Get-Content $path -Raw | ConvertFrom-Json
+        foreach ($property in $previous.PSObject.Properties) {
+            $info[$property.Name] = $property.Value
+        }
+    } catch { }
+    $info.runtime = $RuntimeDir
+    $info.python = Join-Path $RuntimeDir '.venv\Scripts\python.exe'
+    $info.orion = Join-Path $RuntimeDir '.venv\Scripts\orion.exe'
+    $info.features = @($script:Chosen)
+    $info.updatedAt = (Get-Date).ToString('o')
+    $info | ConvertTo-Json | Set-Content -Path $path -Encoding UTF8
+}
+
+function Can-UpdateExistingInstall {
+    return (Test-Path (Join-Path $InstallRoot 'install.json')) -and
+        (Test-Path (Join-Path $RuntimeDir '.venv\Scripts\python.exe'))
+}
+
+function Update-ExistingInstall {
+    Write-Host ''
+    Write-Host '  ORION  -  updating your on-device AI' -ForegroundColor White
+    Write-Info 'Keeping your AI engine, models, voice, settings and selected features.'
+    Write-Log '===== Orion update started ====='
+
+    $savedFeatures = Get-SavedFeatures
+    $script:Chosen = if ($null -eq $savedFeatures) { @() } else { @($savedFeatures) }
+    $script:Uv = Find-Exe 'uv' @(
+        (Get-Record 'installed_uv'),
+        (Join-Path $env:USERPROFILE '.local\bin\uv.exe'),
+        (Join-Path $env:USERPROFILE '.cargo\bin\uv.exe')
+    )
+    if (-not $script:Uv) {
+        # A damaged update installation can still repair its runtime. This is
+        # the only dependency recovery allowed on the update path.
+        Install-Uv
+    } else {
+        Write-Ok "uv: $script:Uv"
+    }
+
+    Install-OrionRuntime
+    Save-UpdatedInstallInfo
+    if ($StatusFile) {
+        Write-Shared $StatusFile (@{
+            step = $TotalSteps; total = $TotalSteps; label = 'Updated';
+            percent = 100; done = $true; error = ''
+        } | ConvertTo-Json -Compress)
+    }
+    Write-Host ''
+    Write-Host '  Orion is updated. Your on-device AI is ready.' -ForegroundColor Green
+    Write-Log '===== Orion update finished ====='
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -763,23 +828,28 @@ Write-Log '===== Orion setup started ====='
 
 $exitCode = 0
 try {
-    $script:Chosen = @(Resolve-Features)
-    Write-Log "Features: core + $($script:Chosen -join ', ')"
-    Set-Content -Path $FeaturesFile -Value $(if ($script:Chosen.Count) { $script:Chosen -join ',' } else { 'none' }) -Encoding ASCII
-    Test-Prerequisites
-    Install-Uv
-    Install-Ollama
-    Install-Node
-    Install-OrionRuntime
-    Initialize-Config
-    Install-Models
-    Initialize-Voice
-    Save-InstallInfo
-    Write-Progress -Activity 'Setting up Orion' -Completed
-    if ($StatusFile) { Write-Shared $StatusFile (@{ step = $TotalSteps; total = $TotalSteps; label = 'Done'; percent = 100; done = $true; error = '' } | ConvertTo-Json -Compress) }
-    Write-Host ''
-    Write-Host '  Orion is ready. Open it from the Start menu.' -ForegroundColor Green
-    Write-Log '===== Orion setup finished ====='
+    if ($Update -and (Can-UpdateExistingInstall)) {
+        Update-ExistingInstall
+    } else {
+        if ($Update) { Write-Info 'The existing installation is incomplete; completing first-time setup.' }
+        $script:Chosen = @(Resolve-Features)
+        Write-Log "Features: core + $($script:Chosen -join ', ')"
+        Set-Content -Path $FeaturesFile -Value $(if ($script:Chosen.Count) { $script:Chosen -join ',' } else { 'none' }) -Encoding ASCII
+        Test-Prerequisites
+        Install-Uv
+        Install-Ollama
+        Install-Node
+        Install-OrionRuntime
+        Initialize-Config
+        Install-Models
+        Initialize-Voice
+        Save-InstallInfo
+        Write-Progress -Activity 'Setting up Orion' -Completed
+        if ($StatusFile) { Write-Shared $StatusFile (@{ step = $TotalSteps; total = $TotalSteps; label = 'Done'; percent = 100; done = $true; error = '' } | ConvertTo-Json -Compress) }
+        Write-Host ''
+        Write-Host '  Orion is ready. Open it from the Start menu.' -ForegroundColor Green
+        Write-Log '===== Orion setup finished ====='
+    }
 } catch {
     $exitCode = 1
     $message = $_.Exception.Message

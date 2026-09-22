@@ -115,6 +115,20 @@ const
 var
   SetupSucceeded: Boolean;
 
+{ A completed Orion install has both its durable setup record and its working
+  Python runtime. Updates preserve its AI engine, downloaded models, voice,
+  settings and feature choices; incomplete installs still use full setup. }
+function IsExistingOrionInstallAt(const Dir: String): Boolean;
+begin
+  Result := FileExists(AddBackslash(Dir) + 'install.json') and
+    FileExists(AddBackslash(Dir) + 'runtime\.venv\Scripts\python.exe');
+end;
+
+function IsExistingOrionInstall(): Boolean;
+begin
+  Result := IsExistingOrionInstallAt(RemoveBackslashUnlessRoot(ExpandConstant('{app}')));
+end;
+
 { The install folder must be local and writable by this user: setup keeps
   downloading into it after the wizard, and later updates run without admin
   rights. Warn when the drive is short of space for the downloads. }
@@ -149,6 +163,10 @@ begin
   DeleteFile(Probe);
   if Created then RemoveDir(Dir);
   if not Result then Exit;
+
+  { A completed update does not download models or voice files, so it does not
+    need the first-install free-space requirement. }
+  if IsExistingOrionInstallAt(Dir) then Exit;
 
   if GetSpaceOnDisk(ExtractFileDrive(Dir), True, FreeMB, TotalMB) and (FreeMB < MinFreeGB * 1024) then
     Result := MsgBox(Format('The drive %s has %d GB free. Orion needs about %d GB for the AI engine, model and voice downloads.', [ExtractFileDrive(Dir), FreeMB div 1024, MinFreeGB]) + #13#10#13#10
@@ -203,19 +221,25 @@ var
   Params: String;
   ResultCode: Integer;
   ShowCmd: Integer;
+  Updating: Boolean;
 begin
   if CurStep = ssPostInstall then
   begin
+    Updating := IsExistingOrionInstall();
     { An in-app update shows Setup's own progress window only. }
     if IsAppUpdate() then
       ShowCmd := SW_HIDE
     else
       ShowCmd := SW_SHOWNORMAL;
-    WizardForm.StatusLabel.Caption := 'Installing the AI engine, AI model, voice and your selected features. A setup window shows the progress; the first install can take a while.';
+    if Updating then
+      WizardForm.StatusLabel.Caption := 'Updating Orion. Your AI engine, models, voice, settings and selected features are kept.'
+    else
+      WizardForm.StatusLabel.Caption := 'Installing the AI engine, AI model, voice and your selected features. A setup window shows the progress; the first install can take a while.';
     Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\setup\orion-setup.ps1') + '"'
       + ' -PayloadDir "' + ExpandConstant('{app}\backend') + '"'
       + ' -InstallRoot "' + ExpandConstant('{app}') + '"'
       + ' -Features "' + SelectedFeatures() + '" -NoPause';
+    if Updating then Params := Params + ' -Update';
     SetupSucceeded := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'), Params, '', ShowCmd, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
     if not SetupSucceeded then
       SuppressibleMsgBox('Orion was installed, but setup could not finish downloading everything it needs.' + #13#10#13#10
