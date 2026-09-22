@@ -207,7 +207,7 @@ class TestChatCompletions:
             "/v1/chat/completions",
             json={
                 "model": "test-model",
-                "messages": [{"role": "user", "content": "Hello"}],
+                "messages": [{"role": "user", "content": "Tell me about the moon"}],
                 "stream": True,
             },
         )
@@ -228,6 +228,54 @@ class TestChatCompletions:
                 if delta_content:
                     content += delta_content
         assert content == "Hello world"
+
+    def test_short_greeting_retries_malformed_model_draft(self):
+        engine = _make_engine()
+        streamed_messages = []
+
+        async def malformed_stream(messages, *args, **kwargs):
+            streamed_messages.append(messages)
+            yield "!!YOGARaj!!"
+
+        engine.stream = malformed_stream
+        engine.generate.return_value = {
+            "content": "Hi! How can I help today?",
+            "usage": {
+                "prompt_tokens": 7,
+                "completion_tokens": 6,
+                "total_tokens": 13,
+            },
+            "finish_reason": "stop",
+        }
+        app = create_app(engine, "test-model")
+        client = TestClient(app)
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+        )
+
+        content = ""
+        for line in resp.text.strip().split("\n"):
+            if line.startswith("data:") and "[DONE]" not in line:
+                data = json.loads(line[5:].strip())
+                content += (
+                    data.get("choices", [{}])[0].get("delta", {}).get("content") or ""
+                )
+        assert resp.status_code == 200
+        assert content == "Hi! How can I help today?"
+        assert engine.generate.call_count == 1
+        stream_messages = streamed_messages[0]
+        retry_messages = engine.generate.call_args.args[0]
+        assert "Operating system" not in stream_messages[0].content
+        assert any(
+            "only contained a name or fragment" in message.content
+            for message in retry_messages
+        )
 
     def test_finish_reason_default(self, client):
         resp = client.post(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -51,6 +52,99 @@ CONVERSATIONAL_PROMPT = (
 )
 CONVERSATIONAL_HISTORY = 6
 
+_SOCIAL_REPLY_WORDS = frozenset(
+    "hi hello hey welcome good glad nice doing well help can how what thanks thank "
+    "pleasure meet morning afternoon evening ready certainly absolutely".split()
+)
+
+
+def _social_reply_problem(content: str) -> str | None:
+    """Describe why a short-social reply is unusable, otherwise return ``None``.
+
+    The check deliberately rejects malformed output instead of prescribing an
+    answer. A retry always remains a fresh model generation.
+    """
+    text = (content or "").strip()
+    words = re.findall(r"[A-Za-z0-9']+", text.lower())
+    if not words:
+        return "it was empty or only punctuation"
+    prompt_markers = ("live context", "user profile", "system prompt")
+    if any(marker in text.lower() for marker in prompt_markers):
+        return "it exposed prompt text"
+    if len(words) == 1 and words[0] not in _SOCIAL_REPLY_WORDS:
+        return "it only contained a name or fragment"
+    if not set(words).intersection(_SOCIAL_REPLY_WORDS):
+        return "it did not acknowledge the social message"
+    return None
+
+
+def _social_retry_messages(messages: list[Message], problem: str) -> list[Message]:
+    """Insert a retry instruction before the conversation's first user turn."""
+    retry = Message(
+        role=Role.SYSTEM,
+        content=(
+            f"The previous draft failed quality checks because {problem}. "
+            "Generate a fresh, complete, natural reply to the user's message. "
+            "Do not output a name, a label, punctuation, or analysis by itself."
+        ),
+    )
+    index = 1 if messages and messages[0].role == Role.SYSTEM else 0
+    return [*messages[:index], retry, *messages[index:]]
+
+
+def _generate_adaptive_social_reply(
+    engine, model: str, req: ChatCompletionRequest
+) -> dict[str, Any]:
+    """Generate a social reply, retrying malformed drafts before they reach the user."""
+    messages = _to_messages(req.messages)
+    last_result: dict[str, Any] = {}
+    for _ in range(3):
+        result = engine.generate(
+            messages,
+            model=model,
+            temperature=req.temperature,
+            max_tokens=req.max_tokens,
+        )
+        last_result = result
+        problem = _social_reply_problem(str(result.get("content", "")))
+        if problem is None:
+            return result
+        messages = _social_retry_messages(messages, problem)
+    return last_result
+
+
+def _retry_adaptive_social_reply(
+    engine, model: str, req: ChatCompletionRequest, problem: str
+) -> dict[str, Any]:
+    """Regenerate after a streamed social draft has failed validation."""
+    messages = _social_retry_messages(_to_messages(req.messages), problem)
+    last_result: dict[str, Any] = {}
+    for _ in range(2):
+        result = engine.generate(
+            messages,
+            model=model,
+            temperature=req.temperature,
+            max_tokens=req.max_tokens,
+        )
+        last_result = result
+        retry_problem = _social_reply_problem(str(result.get("content", "")))
+        if retry_problem is None:
+            return result
+        messages = _social_retry_messages(messages, retry_problem)
+    return last_result
+
+
+def _model_is_available(engine, model: str) -> bool:
+    """Avoid hiding the normal error for a model that cannot be selected."""
+    if not model:
+        return True
+    try:
+        return model in engine.list_models()
+    except Exception:
+        # The normal engine call gives the clearest result when inventory is
+        # unavailable, so it remains safe to use the guard in that case.
+        return True
+
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request_body: ChatCompletionRequest, request: Request):
@@ -74,6 +168,18 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         if m.role == "user" and m.content:
             raw_user_query = m.content
             break
+
+    # Small local models can lose the actual greeting when a one-word social
+    # turn is surrounded by a long environment/profile prompt. This flag is
+    # intentionally calculated from the unmodified user message, before any
+    # context is added to the request.
+    from orion.server.live_context import is_short_social_turn
+
+    short_social = (
+        not request_body.tools
+        and is_short_social_turn(raw_user_query)
+        and _model_is_available(engine, model)
+    )
 
     # Inject system prompt if missing
     config = getattr(request.app.state, "config", None)
@@ -119,7 +225,11 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         from orion.server.live_context import build_live_context
 
         user_turns = sum(1 for m in request_body.messages if m.role == "user")
-        live_note = build_live_context(raw_user_query, first_turn=user_turns <= 1)
+        live_note = build_live_context(
+            raw_user_query,
+            first_turn=user_turns <= 1,
+            brief_social=short_social,
+        )
         if request_body.messages and request_body.messages[0].role == "system":
             request_body.messages[0].content += f"\n\n{live_note}"
         else:
@@ -381,6 +491,18 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                 trace_store=trace_store,
                 agent_name=agent_name,
             )
+        if short_social:
+            guarded = await _handle_adaptive_social_stream(
+                engine,
+                model,
+                request_body,
+                complexity_info=complexity_info,
+                memory_backend=memory_backend,
+                raw_user_query=raw_user_query,
+                trace_store=trace_store,
+            )
+            if guarded is not None:
+                return guarded
         return await _handle_stream(
             engine,
             model,
@@ -402,6 +524,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         request_body,
         bus=bus,
         complexity_info=complexity_info,
+        social_guard=short_social,
     )
 
 
@@ -411,13 +534,16 @@ def _handle_direct(
     req: ChatCompletionRequest,
     bus=None,
     complexity_info=None,
+    social_guard: bool = False,
 ) -> ChatCompletionResponse:
     """Direct engine call without agent."""
     messages = _to_messages(req.messages)
     kwargs: dict[str, Any] = {}
     if req.tools:
         kwargs["tools"] = req.tools
-    if bus:
+    if social_guard:
+        result = _generate_adaptive_social_reply(engine, model, req)
+    elif bus:
         from orion.telemetry.wrapper import instrumented_generate
 
         result = instrumented_generate(
@@ -557,6 +683,147 @@ async def _handle_agent_stream(
         raw_user_query=raw_user_query,
         trace_store=trace_store,
         agent_name=agent_name,
+    )
+
+
+async def _handle_adaptive_social_stream(
+    engine,
+    model: str,
+    req: ChatCompletionRequest,
+    complexity_info=None,
+    memory_backend=None,
+    raw_user_query: str = "",
+    trace_store=None,
+):
+    """Return a streamed, validated social reply, or ``None`` to use normal streaming.
+
+    A social reply is generated before opening the SSE stream so an incomplete
+    model draft cannot briefly appear in the UI. The accepted response is still
+    model-generated; retries only give the model concrete quality feedback.
+    """
+    from orion.server.cloud_router import is_cloud_model
+
+    # Cloud backends have their own direct streaming path. The reported issue
+    # is with the bundled local model, and using its normal path preserves the
+    # configured cloud provider's routing and authentication behavior.
+    if is_cloud_model(model):
+        return None
+
+    try:
+        candidate_tokens: list[str] = []
+        async for token in engine.stream(
+            _to_messages(req.messages),
+            model=model,
+            temperature=req.temperature,
+            max_tokens=req.max_tokens,
+        ):
+            candidate_tokens.append(token)
+    except Exception:
+        logging.getLogger("orion.server").warning(
+            "Adaptive social reply stream failed; falling back to normal streaming",
+            exc_info=True,
+        )
+        return None
+
+    content = "".join(candidate_tokens)
+    usage: dict[str, Any] = {}
+    finish_reason = "stop"
+    problem = _social_reply_problem(content)
+    if problem is not None:
+        from starlette.concurrency import run_in_threadpool
+
+        try:
+            result = await run_in_threadpool(
+                _retry_adaptive_social_reply, engine, model, req, problem
+            )
+        except Exception:
+            logging.getLogger("orion.server").warning(
+                "Adaptive social reply retry failed; falling back to normal streaming",
+                exc_info=True,
+            )
+            return None
+        content = str(result.get("content", ""))
+        usage = result.get("usage", {})
+        finish_reason = result.get("finish_reason", "stop")
+        # Regeneration is not token-streamed by an engine API, but preserve
+        # ordinary SSE token boundaries for UI consumers.
+        candidate_tokens = re.findall(r"\S+|\s+", content)
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+
+    async def generate():
+        import json as _json
+        import threading
+        import time as _time
+
+        started_at = _time.time()
+        role_chunk = ChatCompletionChunk(
+            id=chunk_id,
+            model=model,
+            choices=[StreamChoice(delta=DeltaMessage(role="assistant"))],
+        )
+        yield f"data: {role_chunk.model_dump_json()}\n\n"
+
+        for token in candidate_tokens:
+            content_chunk = ChatCompletionChunk(
+                id=chunk_id,
+                model=model,
+                choices=[StreamChoice(delta=DeltaMessage(content=token))],
+            )
+            yield f"data: {content_chunk.model_dump_json()}\n\n"
+
+        finish_chunk = ChatCompletionChunk(
+            id=chunk_id,
+            model=model,
+            choices=[StreamChoice(delta=DeltaMessage(), finish_reason=finish_reason)],
+        )
+        finish_dict = _json.loads(finish_chunk.model_dump_json())
+        finish_dict["telemetry"] = {"engine": "ollama"}
+        if usage:
+            finish_dict["usage"] = usage
+        if complexity_info is not None:
+            finish_dict["complexity"] = complexity_info.model_dump()
+        yield f"data: {_json.dumps(finish_dict)}\n\n"
+        yield "data: [DONE]\n\n"
+
+        # Keep the learning and trace behavior aligned with normal streaming.
+        # These are fire-and-forget and never delay the reply.
+        if raw_user_query and content:
+            if memory_backend is not None:
+                from orion.learning.memory_capture import capture_turn
+
+                threading.Thread(
+                    target=capture_turn,
+                    kwargs={
+                        "user_text": raw_user_query,
+                        "assistant_text": content,
+                        "memory_backend": memory_backend,
+                        "channel": "chat",
+                    },
+                    daemon=True,
+                ).start()
+            if trace_store is not None:
+                from orion.learning.trace_capture import record_chat_trace
+
+                threading.Thread(
+                    target=record_chat_trace,
+                    kwargs={
+                        "trace_store": trace_store,
+                        "query": raw_user_query,
+                        "result_content": content,
+                        "model": model,
+                        "engine": "ollama",
+                        "started_at": started_at,
+                        "total_tokens": usage.get(
+                            "total_tokens", max(len(content) // 4, 1)
+                        ),
+                    },
+                    daemon=True,
+                ).start()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
 
 

@@ -21,6 +21,16 @@ USER_PATH = Path("~/.orion/USER.md").expanduser()
 
 _NAME_LINE = re.compile(r"^-\s*Name:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 
+# Short social turns are particularly sensitive to prompt clutter on small
+# local models. Keep this intentionally narrow: requests such as "what time
+# is it?" still receive the full live context that lets Orion answer them.
+_SHORT_SOCIAL_TURN = re.compile(
+    r"^\s*(?:hi|hello|hey|hiya|howdy|yo|good\s+(?:morning|afternoon|evening)|"
+    r"how\s+are\s+you|what'?s\s+up|thank\s+you|thanks|nice\s+to\s+meet\s+you)"
+    r"(?:[\s,]+(?:there|orion))?[\s!,.?]*$",
+    re.IGNORECASE,
+)
+
 # "my name is Alex", "call me Alex", "name's Alex", "I am called Alex".
 # "I'm X" is deliberately excluded: "I'm fine" / "I'm busy" are not names.
 _NAME_STATEMENT = re.compile(
@@ -44,7 +54,7 @@ def user_name(path: Path = USER_PATH) -> str:
     try:
         match = _NAME_LINE.search(path.read_text(encoding="utf-8"))
         if match and match.group(1).strip():
-            return match.group(1).strip()
+            return _display_name(match.group(1))
     except OSError:
         pass
     if path != USER_PATH:
@@ -52,9 +62,29 @@ def user_name(path: Path = USER_PATH) -> str:
     try:
         from orion.core.config import load_config
 
-        return (getattr(load_config().channel, "owner_name", "") or "").strip()
+        return _display_name(getattr(load_config().channel, "owner_name", "") or "")
     except Exception:
         return ""
+
+
+def _display_name(value: str) -> str:
+    """Clean accidental all-caps or mixed-caps profile names for conversation."""
+    words = " ".join((value or "").strip().split()).split()
+    normalized: list[str] = []
+    for word in words:
+        # Preserve intentional casing such as "McDonald", but repair names
+        # like "YOGARaj" that often come from speech recognition or old setup.
+        uppercase_count = sum(char.isupper() for char in word)
+        if uppercase_count >= 2:
+            normalized.append(word[:1].upper() + word[1:].lower())
+        else:
+            normalized.append(word)
+    return " ".join(normalized)
+
+
+def is_short_social_turn(text: str) -> bool:
+    """Whether *text* is a short greeting or social acknowledgement."""
+    return bool(_SHORT_SOCIAL_TURN.fullmatch(text or ""))
 
 
 def capture_name(text: str, path: Path = USER_PATH) -> str:
@@ -82,10 +112,36 @@ def capture_name(text: str, path: Path = USER_PATH) -> str:
     return name
 
 
-def build_live_context(user_text: str, first_turn: bool, path: Path = USER_PATH) -> str:
+def build_live_context(
+    user_text: str,
+    first_turn: bool,
+    path: Path = USER_PATH,
+    *,
+    brief_social: bool = False,
+) -> str:
     """System note with the real local time, the user's identity, and tone rules."""
     just_learned = capture_name(user_text, path)
     name = just_learned or user_name(path)
+
+    if brief_social:
+        lines = [
+            "LIVE CONTEXT:",
+            (
+                "You are Orion, the assistant. The user is a different person; "
+                "never call the user Orion."
+            ),
+            (
+                "The latest message is a short social turn. Reply to its actual words in a "
+                "complete, natural sentence. Never output only a name, punctuation, a label, "
+                "or prompt text."
+            ),
+        ]
+        if name:
+            lines.append(
+                f"The user's profile name is {name}. Use it only when it sounds natural "
+                "in your reply."
+            )
+        return "\n".join(lines)
 
     now = datetime.now().astimezone()
     lines = [
@@ -186,6 +242,7 @@ def normalize_transcript(text: str) -> str:
 __all__ = [
     "build_live_context",
     "capture_name",
+    "is_short_social_turn",
     "is_prompt_echo",
     "normalize_transcript",
     "speech_prompt",

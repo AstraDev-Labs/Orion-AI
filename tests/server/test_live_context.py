@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from orion.server.live_context import build_live_context, capture_name, user_name
+from orion.server.live_context import (
+    build_live_context,
+    capture_name,
+    is_short_social_turn,
+    user_name,
+)
 from orion.tools.tool_router import is_conversational
 
 
@@ -47,6 +52,27 @@ def test_context_uses_known_name(tmp_path):
     note = build_live_context("how are you", first_turn=False, path=path)
     assert "The user's name is Alex" in note
     assert "never call the user Orion" in note
+
+
+def test_short_social_context_is_minimal_and_profile_name_is_normalized(tmp_path):
+    path = tmp_path / "USER.md"
+    path.write_text("- Name: YOGARaj\n", encoding="utf-8")
+
+    note = build_live_context("Hi!", first_turn=True, path=path, brief_social=True)
+
+    assert user_name(path) == "Yogaraj"
+    assert "Local date and time" not in note
+    assert "Operating system" not in note
+    assert "only a name" in note
+    assert "Yogaraj" in note
+
+
+def test_short_social_turn_detection_is_narrow():
+    assert is_short_social_turn("Hi")
+    assert is_short_social_turn("good evening, Orion!")
+    assert is_short_social_turn("How are you?")
+    assert not is_short_social_turn("What time is it?")
+    assert not is_short_social_turn("Hi, open Chrome")
 
 
 def test_conversational_detection():
