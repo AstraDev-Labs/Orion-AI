@@ -362,6 +362,10 @@ begin
   Pulled := RecordValue('pulled_models');
   StringChangeEx(Pulled, ',', ', ', True);
   ModelsDir := RecordValue('ollama_models_dir');
+  { Early Orion builds did not persist uninstall.ini. Their private Ollama
+    model folder is still safe to offer because it is below Orion's app folder. }
+  if (ModelsDir = '') and DirExists(App + '\models\ollama') then
+    ModelsDir := App + '\models\ollama';
   OwnOllama := RecordValue('installed_ollama');
   OwnUv := RecordValue('installed_uv');
 

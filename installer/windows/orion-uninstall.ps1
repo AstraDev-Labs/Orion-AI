@@ -70,6 +70,31 @@ function Stop-ProcessesUnder([string]$Folder) {
     }
 }
 
+# Ollama may have been installed before Orion, while Orion configured it to use
+# a private model folder below AppDir.  In that case its background server holds
+# blobs open, so rd cannot remove the model folder.  Only stop Ollama when the
+# user's current OLLAMA_MODELS setting points at this Orion-owned folder; a
+# separate Ollama installation using its own models is left running.
+function Stop-OllamaServingModels([string]$ModelsDir) {
+    if (-not $ModelsDir -or -not (Test-Inside $ModelsDir $AppDir)) { return }
+    $configured = [Environment]::GetEnvironmentVariable('OLLAMA_MODELS', 'User')
+    if (-not $configured) { return }
+    try {
+        $sameFolder = [IO.Path]::GetFullPath($configured).TrimEnd('\') -ieq [IO.Path]::GetFullPath($ModelsDir).TrimEnd('\')
+    } catch {
+        $sameFolder = $false
+    }
+    if (-not $sameFolder) { return }
+
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ProcessId -ne $PID -and $_.Name -like 'ollama*.exe'
+    } | ForEach-Object {
+        Write-Log "  stopping Ollama process $($_.Name) ($($_.ProcessId)) serving Orion models"
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 1
+}
+
 function Test-OllamaUp {
     try { $null = Invoke-WebRequest -Uri 'http://127.0.0.1:11434/api/tags' -UseBasicParsing -TimeoutSec 3; return $true } catch { return $false }
 }
@@ -87,10 +112,19 @@ Start-Sleep -Seconds 1
 # --- AI models --------------------------------------------------------------
 if ($Parts -contains 'models') {
     $modelsDir = Get-Record 'ollama_models_dir'
+    # Installers before uninstall.ini was introduced still stored their Ollama
+    # models below the app folder.  This location is unambiguously Orion-owned,
+    # so it is safe to use as a fallback without touching a user's normal
+    # ~/.ollama model library.
+    if (-not $modelsDir) {
+        $legacyModelsDir = Join-Path $AppDir 'models\ollama'
+        if (Test-Path -LiteralPath $legacyModelsDir) { $modelsDir = $legacyModelsDir }
+    }
     if ($modelsDir -and (Test-Inside $modelsDir $AppDir)) {
         # A model folder setup created inside the install folder: stop the
         # Ollama serving it, delete the folder, and stop pointing Ollama at it.
         if ($ownOllama) { Stop-ProcessesUnder $ownOllama }
+        Stop-OllamaServingModels $modelsDir
         Remove-Tree $modelsDir
         $current = [Environment]::GetEnvironmentVariable('OLLAMA_MODELS', 'User')
         if ($current -and ([IO.Path]::GetFullPath($current).TrimEnd('\') -ieq [IO.Path]::GetFullPath($modelsDir).TrimEnd('\'))) {
