@@ -15,8 +15,9 @@ than discovering it in a packet capture.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 if TYPE_CHECKING:
     from orion.core.config import OrionConfig
@@ -24,8 +25,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Runs entirely on this machine.
-LOCAL_BACKENDS: List[str] = ["chatterbox", "kokoro"]
+# Runs entirely on this machine. Kokoro comes first: it is what the Windows
+# installer ships, and Chatterbox is several times slower than real time on CPU.
+LOCAL_BACKENDS: List[str] = ["kokoro", "chatterbox"]
+
+# The Python package each local backend imports when it first speaks. Both
+# backends load lazily, so constructing one succeeds even when its package is
+# missing; without this check "auto" picked Chatterbox on installs that only
+# have Kokoro, and every spoken reply then failed.
+_LOCAL_PACKAGES: Dict[str, str] = {"kokoro": "kokoro", "chatterbox": "chatterbox"}
 
 # Ships text to a third party. Gated behind config.tts.allow_cloud.
 CLOUD_BACKENDS: List[str] = ["cartesia", "elevenlabs", "openai"]
@@ -38,6 +46,16 @@ def is_local(key: str) -> bool:
     return key.strip().lower() in LOCAL_BACKENDS
 
 
+def _package_installed(key: str) -> bool:
+    package = _LOCAL_PACKAGES.get(key)
+    if package is None:
+        return True
+    try:
+        return importlib.util.find_spec(package) is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def _create_backend(key: str, config: "OrionConfig") -> Optional["TTSBackend"]:
     """Instantiate one TTS backend by registry key, or None if unavailable.
 
@@ -48,6 +66,9 @@ def _create_backend(key: str, config: "OrionConfig") -> Optional["TTSBackend"]:
     from orion.core.registry import TTSRegistry
 
     if not TTSRegistry.contains(key):
+        return None
+    if not _package_installed(key):
+        logger.debug("TTS backend %r skipped: its package is not installed", key)
         return None
 
     tts = getattr(config, "tts", None)
@@ -86,13 +107,30 @@ def get_tts_backend(config: "OrionConfig") -> Optional["TTSBackend"]:
             )
             return None
         backend = _create_backend(requested, config)
-        if backend is None:
+        if backend is not None:
+            return backend
+        if requested not in LOCAL_BACKENDS:
             logger.warning(
-                "TTS backend %r is configured but unavailable -- the package is probably "
-                "not installed.",
+                "TTS backend %r is configured but unavailable -- the package is "
+                "probably not installed.",
                 requested,
             )
-        return backend
+            return None
+        # A local voice that isn't installed: use another local one rather than
+        # going silent. Cloud voices are never a fallback.
+        for key in LOCAL_BACKENDS:
+            if key == requested:
+                continue
+            fallback = _create_backend(key, config)
+            if fallback is not None:
+                logger.warning(
+                    "TTS backend %r is configured but not installed; using %r instead.",
+                    requested,
+                    key,
+                )
+                return fallback
+        logger.warning("TTS backend %r is configured but not installed.", requested)
+        return None
 
     for key in DISCOVERY_ORDER:
         if key in CLOUD_BACKENDS and not allow_cloud:

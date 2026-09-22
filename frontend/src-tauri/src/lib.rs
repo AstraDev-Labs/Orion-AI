@@ -543,6 +543,10 @@ fn spawn_orion_server(
 ) -> std::io::Result<tokio::process::Child> {
     let serve_args = [
         "serve".to_string(),
+        // This computer only, whatever the config file says: older generated
+        // configs set host = "0.0.0.0", which exposed Orion to the network.
+        "--host".to_string(),
+        "127.0.0.1".to_string(),
         "--port".to_string(),
         ORION_PORT.to_string(),
         "--model".to_string(),

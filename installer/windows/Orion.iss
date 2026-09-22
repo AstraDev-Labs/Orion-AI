@@ -10,7 +10,7 @@
 ; are a fixed component and cannot be unticked. No administrator rights needed.
 
 #ifndef AppVersion
-  #define AppVersion "1.0.1"
+  #define AppVersion "1.0.3"
 #endif
 #ifndef AppExe
   #define AppExe "..\..\frontend\src-tauri\target\release\orion-desktop.exe"

@@ -163,6 +163,24 @@ function Invoke-Native([string]$File, [string[]]$Arguments, [scriptblock]$OnLine
     }
 }
 
+# Runs a downloaded installer and returns its exit code. Waits for the
+# installer process only: Start-Process -Wait also waits for every program the
+# installer launches, and Ollama's installer starts its tray app, which never
+# exits -- setup hung right after the download until the window was closed.
+function Invoke-Installer([string]$File, [string[]]$Arguments, [string]$What, [int]$TimeoutMinutes = 20) {
+    Write-Log "  run: $File $($Arguments -join ' ')"
+    $proc = Start-Process -FilePath $File -ArgumentList $Arguments -PassThru
+    # Cache the handle now; without it Windows PowerShell can lose the exit code.
+    $null = $proc.Handle
+    if (-not $proc.WaitForExit($TimeoutMinutes * 60 * 1000)) {
+        try { $proc.Kill() } catch { }
+        throw "$What did not finish within $TimeoutMinutes minutes."
+    }
+    $proc.WaitForExit()
+    Write-Log "  $What exited with code $($proc.ExitCode)"
+    return $proc.ExitCode
+}
+
 function Invoke-Checked([string]$File, [string[]]$Arguments, [string]$What) {
     Write-Log "  run: $File $($Arguments -join ' ')"
     $code = Invoke-Native $File $Arguments
@@ -381,9 +399,10 @@ function Test-Prerequisites {
         Save-Download 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' $bootstrapper 'Microsoft Edge WebView2'
         $sig = Get-AuthenticodeSignature -FilePath $bootstrapper
         if ($sig.Status -ne 'Valid') { throw 'The WebView2 installer is not validly signed. Nothing was installed.' }
-        $proc = Start-Process -FilePath $bootstrapper -ArgumentList '/silent', '/install' -Wait -PassThru
+        Write-Info 'Installing Microsoft Edge WebView2...'
+        $code = Invoke-Installer $bootstrapper @('/silent', '/install') 'The WebView2 installer'
         Remove-Item $bootstrapper -Force -ErrorAction SilentlyContinue
-        if ($proc.ExitCode -ne 0) { throw "Microsoft Edge WebView2 could not be installed (code $($proc.ExitCode))." }
+        if ($code -ne 0) { throw "Microsoft Edge WebView2 could not be installed (code $code)." }
         Write-Ok 'Microsoft Edge WebView2 installed'
     } else {
         Write-Ok 'Microsoft Edge WebView2 present'
@@ -434,6 +453,9 @@ function Install-Ollama {
         Set-Record 'ollama_models_dir' $script:OllamaModels
     }
     if (-not $script:Ollama) {
+        $ollamaNotice = 'Ollama installation may take about 5 to 10 minutes. Please do not close this window.'
+        Write-Info $ollamaNotice
+        Set-Status 3 'Local AI engine (Ollama)' $ollamaNotice
         $setup = Join-Path $env:TEMP 'OllamaSetup.exe'
         Save-Download 'https://ollama.com/download/OllamaSetup.exe' $setup 'Ollama (about 1 GB)'
         $sig = Get-AuthenticodeSignature -FilePath $setup
@@ -442,8 +464,9 @@ function Install-Ollama {
             throw "The downloaded Ollama installer is not validly signed ($($sig.Status)). Nothing was installed."
         }
         Write-Info "Signed by: $($sig.SignerCertificate.Subject)"
-        $proc = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$ownOllama`"" -Wait -PassThru
-        if ($proc.ExitCode -ne 0) { throw "Ollama installer exited with code $($proc.ExitCode)." }
+        Write-Info 'Installing Ollama...'
+        $code = Invoke-Installer $setup @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$ownOllama`"") 'The Ollama installer'
+        if ($code -ne 0) { throw "Ollama installer exited with code $code." }
         Remove-Item $setup -Force -ErrorAction SilentlyContinue
         Update-SessionPath
         $script:Ollama = Find-Exe 'ollama' $candidates
@@ -623,32 +646,87 @@ function Install-Models {
 
 function Initialize-Voice {
     Write-Step 8 'Voice (speech recognition and speech)'
+    Set-Status 8 'Voice (speech recognition and speech)' 'Downloading voice models (about 500 MB)'
     $python = Join-Path $RuntimeDir '.venv\Scripts\python.exe'
+    # Prints each stage as it starts, so a slow download never looks frozen,
+    # and records results in setup.log itself (its output is not captured).
     $warm = @'
-import sys
+import os, sys, time, traceback, warnings
+warnings.filterwarnings("ignore")
+LOG = os.environ.get("ORION_SETUP_LOG", "")
+
+def say(message):
+    print("      " + message, flush=True)
+    if LOG:
+        try:
+            with open(LOG, "a", encoding="utf-8") as log:
+                log.write(time.strftime("%Y-%m-%d %H:%M:%S") + "    voice: " + message + "\n")
+        except OSError:
+            pass
+
+ok = True
 try:
-    from faster_whisper import WhisperModel
+    say("Loading speech tools...")
     from orion.core.config import load_config
     from orion.speech._discovery import whisper_model_for
+    from orion.speech._model_files import prepare_whisper
+    from orion.speech.faster_whisper import FasterWhisperBackend
     speech = load_config().speech
     # The model Orion will actually load (base.en when speech is English).
-    WhisperModel(whisper_model_for(speech.model, speech.language), device="cpu", compute_type="int8")
-    print("speech recognition ready")
+    name = whisper_model_for(speech.model, speech.language)
+    say("Downloading speech recognition (Whisper " + name + ", about 150 MB)...")
+    prepare_whisper(name, say)
+    stt = FasterWhisperBackend(model_size=name, device="cpu", compute_type="int8")
+    stt._ensure_model()
+    say("Speech recognition ready")
 except Exception as exc:
-    print("speech recognition not prepared:", exc)
+    ok = False
+    say("Speech recognition not prepared: " + str(exc))
+    say(traceback.format_exc())
 try:
-    from kokoro import KPipeline
-    pipe = KPipeline(lang_code="a", device="cpu", repo_id="hexgrad/Kokoro-82M")
-    list(pipe("Ready.", voice="af_heart"))
-    print("voice ready")
+    say("Loading the voice engine (this can take a minute)...")
+    from orion.speech._model_files import prepare_kokoro
+    from orion.speech.kokoro_tts import KokoroTTSBackend
+    say("Downloading Orion's voice (Kokoro, about 330 MB)...")
+    prepare_kokoro(say)
+    result = KokoroTTSBackend(device="cpu").synthesize("Ready.", voice_id="af_heart")
+    if not result.audio or result.duration_seconds <= 0:
+        raise RuntimeError("The voice engine produced no audio")
+    say("Voice ready")
 except Exception as exc:
-    print("voice not prepared:", exc)
+    ok = False
+    say("Voice not prepared: " + str(exc))
+    say(traceback.format_exc())
+sys.exit(0 if ok else 3)
 '@
     $warmFile = Join-Path $env:TEMP 'orion-warm-voice.py'
     Set-Content -Path $warmFile -Value $warm -Encoding UTF8
-    [void](Invoke-Native $python @($warmFile) { param($line) if ($line -match 'ready|not prepared') { Write-Info $line } })
+    $env:ORION_SETUP_LOG = $LogFile
+    $env:PYTHONIOENCODING = 'utf-8'
+    $env:HF_HUB_DISABLE_SYMLINKS_WARNING = '1'
+    $env:HF_HUB_VERBOSITY = 'error'
+    # Give up on a stalled connection instead of waiting forever.
+    $env:HF_HUB_DOWNLOAD_TIMEOUT = '60'
+    $env:HF_HUB_ETAG_TIMEOUT = '30'
+    Write-Log "  run: $python -u $warmFile"
+    # Same console, so Hugging Face's download progress bars stay visible.
+    $proc = Start-Process -FilePath $python -ArgumentList @('-u', '-W', 'ignore', "`"$warmFile`"") -NoNewWindow -PassThru
+    $null = $proc.Handle
+    $minutes = 30
+    if (-not $proc.WaitForExit($minutes * 60 * 1000)) {
+        try { $proc.Kill() } catch { }
+        Write-Info "Voice download stopped after $minutes minutes."
+        $code = -1
+    } else {
+        $proc.WaitForExit()
+        $code = $proc.ExitCode
+    }
     Remove-Item $warmFile -Force -ErrorAction SilentlyContinue
-    Write-Ok 'Voice models downloaded (voice still works later if this step was skipped)'
+    Write-Log "  voice warm-up exit code $code"
+    if ($code -ne 0) {
+        throw "Voice models could not be prepared (exit code $code). See $LogFile and run setup again."
+    }
+    Write-Ok 'Voice models ready'
 }
 
 function Save-InstallInfo {

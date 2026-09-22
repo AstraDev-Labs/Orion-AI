@@ -44,7 +44,6 @@ export function CoreScreen({
   const [ttftMs, setTtftMs] = useState<number | null>(null);
   const [tokPerSec, setTokPerSec] = useState<number | null>(null);
   const startRef = useRef(0);
-  const tokenCountRef = useRef(0);
 
   // Real, computed from actual usage -- the same energy/cost estimation
   // methodology already used on the Reckoning screen and the right-rail
@@ -52,6 +51,9 @@ export function CoreScreen({
   const [avoidedDollars, setAvoidedDollars] = useState<number | null>(null);
   const [totalTokens, setTotalTokens] = useState<number | null>(null);
   const [drawWatts, setDrawWatts] = useState<number | null>(null);
+  // False once vitals have loaded without a power reading: no NVIDIA GPU (or
+  // its sensor can't be read), so Draw says so instead of a bare dash.
+  const [drawAvailable, setDrawAvailable] = useState(true);
 
   // Real per-session draw stats and energy, integrated client-side from
   // actual NVML samples polled every 5s -- not a mock "38W average, 71W
@@ -74,6 +76,7 @@ export function CoreScreen({
       fetchVitals()
         .then((v) => {
           setDrawWatts(v.draw_watts);
+          setDrawAvailable(v.draw_watts != null);
           if (v.draw_watts == null) return;
           const now = Date.now();
           const samples = drawSamplesRef.current;
@@ -119,7 +122,6 @@ export function CoreScreen({
     setActivityNote('Thinking…');
     setTtftMs(null);
     setTokPerSec(null);
-    tokenCountRef.current = 0;
 
     let convId = activeId;
     if (!convId) convId = createConversation(selectedModel);
@@ -153,6 +155,13 @@ export function CoreScreen({
     setStreaming(true);
     startRef.current = Date.now();
     let acc = '';
+    // Timing lives in locals, not state: the callback's copy of ttftMs was
+    // stale, so TTFT was overwritten on every chunk of the first reply and
+    // never set on later ones.
+    let firstChunkAt = 0;
+    let lastChunkAt = 0;
+    let chunks = 0;
+    let reportedTokens = 0;
     try {
       for await (const ev of streamChat({ model: selectedModel, messages: apiMessages, stream: true }, undefined)) {
         try {
@@ -166,17 +175,26 @@ export function CoreScreen({
             continue;
           }
           if (ev.event) continue;
+          const completionTokens = data.usage?.completion_tokens;
+          if (typeof completionTokens === 'number' && completionTokens > 0) reportedTokens = completionTokens;
           const delta = data.choices?.[0]?.delta?.content;
           if (delta) {
-            if (ttftMs === null) setTtftMs(Date.now() - startRef.current);
+            const now = Date.now();
+            if (!firstChunkAt) {
+              firstChunkAt = now;
+              setTtftMs(now - startRef.current);
+            }
+            lastChunkAt = now;
+            chunks += 1;
             acc += delta;
             armRevealFallback();
             speechQueue?.pushDelta(delta);
-            tokenCountRef.current += 1;
             setContent(acc);
-            const elapsedS = (Date.now() - startRef.current) / 1000;
-            if (elapsedS > 0) {
-              const rate = tokenCountRef.current / elapsedS;
+            // Live rate over the generation itself (first to latest chunk), not
+            // the wait before it; each streamed chunk is about one token.
+            const genS = (now - firstChunkAt) / 1000;
+            if (chunks >= 3 && genS >= 0.25) {
+              const rate = (chunks - 1) / genS;
               setTokPerSec(rate);
               onFiringRateChange?.(rate);
             }
@@ -187,6 +205,19 @@ export function CoreScreen({
         }
       }
     } finally {
+      if (firstChunkAt) {
+        // Final figure: the engine's own token count when it reports one.
+        const tokens = reportedTokens || chunks;
+        const genS = (lastChunkAt - firstChunkAt) / 1000;
+        if (genS >= 0.25 && tokens > 1) {
+          setTokPerSec((tokens - 1) / genS);
+        } else {
+          // The reply arrived in one burst (e.g. after a tool ran): report the
+          // average over the whole request rather than a meaningless spike.
+          const totalS = (lastChunkAt - startRef.current) / 1000;
+          if (totalS > 0) setTokPerSec(tokens / totalS);
+        }
+      }
       speechQueue?.flush();
       if (speechQueue) {
         // Once the voice finishes (or is interrupted), show the complete reply.
@@ -201,7 +232,7 @@ export function CoreScreen({
       setStreaming(false);
       onFiringRateChange?.(0);
     }
-  }, [input, streaming, activeId, createConversation, selectedModel, addMessage, messages, ttftMs, onFiringRateChange, onSpeakingChange]);
+  }, [input, streaming, activeId, createConversation, selectedModel, addMessage, messages, onFiringRateChange, onSpeakingChange]);
 
   const sendRef = useRef(send);
   sendRef.current = send;
@@ -343,10 +374,21 @@ export function CoreScreen({
         </div>
         <div style={{ position: 'absolute', bottom: '24%', left: '9%', textAlign: 'left' }}>
           <div className="holo-kicker">Draw</div>
-          <div style={{ fontFamily: 'var(--font-heading)', fontSize: 26, color: 'var(--color-accent-300)' }}>
-            {drawWatts !== null ? drawWatts.toFixed(0) : '—'}
-            <span style={{ fontSize: 12, color: 'var(--color-neutral-400)' }}> W</span>
-          </div>
+          {drawAvailable ? (
+            <div style={{ fontFamily: 'var(--font-heading)', fontSize: 26, color: 'var(--color-accent-300)' }}>
+              {drawWatts !== null ? drawWatts.toFixed(0) : '—'}
+              <span style={{ fontSize: 12, color: 'var(--color-neutral-400)' }}> W</span>
+            </div>
+          ) : (
+            <div
+              title="Power draw is read from an NVIDIA graphics card's sensor. This PC doesn't have one Orion can read."
+              style={{ fontFamily: 'var(--font-heading)', fontSize: 13, lineHeight: 1.35, marginTop: 6, color: 'var(--color-neutral-400)' }}
+            >
+              No GPU power
+              <br />
+              sensor
+            </div>
+          )}
         </div>
         <div style={{ position: 'absolute', bottom: '24%', right: '9%', textAlign: 'right' }}>
           <div className="holo-kicker">Avoided</div>
