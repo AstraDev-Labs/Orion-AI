@@ -26,6 +26,9 @@ def test_completed_install_uses_the_update_path_only():
     assert "Initialize-Voice" not in update
     assert "-Update" in inno
     assert "IsExistingOrionInstall" in inno
+    assert "procedure ConfigureReadyPage" in inno
+    assert "Ready to Update" in inno
+    assert "NextButton.Caption := '&Update'" in inno
 
 
 def test_windows_setup_script_has_valid_powershell_syntax():

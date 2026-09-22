@@ -129,6 +129,39 @@ begin
   Result := IsExistingOrionInstallAt(RemoveBackslashUnlessRoot(ExpandConstant('{app}')));
 end;
 
+{ The actual update decision is repeated after files are copied, but show it
+  before the user clicks Install. This makes a completed installation visibly
+  different from a first-time setup and explains what will be preserved. }
+procedure ConfigureReadyPage;
+var
+  Updating: Boolean;
+begin
+  Updating := IsExistingOrionInstallAt(RemoveBackslashUnlessRoot(WizardDirValue()));
+  if Updating then
+  begin
+    WizardForm.PageNameLabel.Caption := 'Ready to Update';
+    WizardForm.PageDescriptionLabel.Caption := 'Setup is ready to update Orion on your computer.';
+    WizardForm.ReadyLabel.Caption := 'Click Update to refresh Orion. Your AI engine, models, voice, settings and selected features will stay in place.';
+    WizardForm.ReadyMemo.Lines.Text := 'Update details:' + #13#10
+      + '  • Orion application and backend will be refreshed' + #13#10
+      + '  • Local AI engine, downloaded models and voice files will be kept' + #13#10
+      + '  • Settings, memories and selected features will be kept';
+    WizardForm.NextButton.Caption := '&Update';
+  end
+  else
+  begin
+    WizardForm.PageNameLabel.Caption := 'Ready to Install';
+    WizardForm.PageDescriptionLabel.Caption := 'Setup is now ready to begin installing Orion on your computer.';
+    WizardForm.ReadyLabel.Caption := 'Click Install to continue with the installation, or click Back if you want to review or change any settings.';
+    WizardForm.NextButton.Caption := '&Install';
+  end;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if CurPageID = wpReady then ConfigureReadyPage;
+end;
+
 { The install folder must be local and writable by this user: setup keeps
   downloading into it after the wizard, and later updates run without admin
   rights. Warn when the drive is short of space for the downloads. }
