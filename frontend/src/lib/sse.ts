@@ -22,6 +22,8 @@ export async function* streamChat(
   });
 
   if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    if (typeof detail?.detail === 'string') throw new Error(detail.detail);
     throw new Error(`Chat request failed: ${response.status}`);
   }
 

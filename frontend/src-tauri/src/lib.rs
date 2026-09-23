@@ -89,8 +89,23 @@ fn models_that_fit() -> Vec<&'static str> {
         .collect()
 }
 
-/// Pick the default model — prefers STARTUP_MODEL if it fits, otherwise
-/// falls back to the third-largest model that fits on this machine.
+/// Read the user's persisted chat-model preference without changing settings.
+fn configured_chat_model() -> Option<String> {
+    let path = std::env::var_os("OPENORION_CONFIG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(home_dir()).join(".orion/config.toml"));
+    let text = std::fs::read_to_string(path).ok()?;
+    let config: toml::Value = text.parse().ok()?;
+    let model = config.get("intelligence")?.get("default_model")?.as_str()?.trim();
+    let lower = model.to_lowercase();
+    let family = lower.rsplit('/').next()?.split(':').next()?;
+    if model.is_empty() || family.starts_with("moondream") || family.contains("embed") || family.starts_with("bge-") {
+        return None;
+    }
+    Some(model.to_string())
+}
+
+/// Pick the installer recommendation when no installed preference is available.
 fn preferred_model() -> &'static str {
     let fitting = models_that_fit();
     // Prefer STARTUP_MODEL when it fits (fast, good quality)
@@ -738,7 +753,14 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
 
     // Phase 2: make sure the model this machine uses is present. Setup picked
     // it from this PC's memory (install.json); without setup, pick the same way.
-    let wanted_model: String = installed_model().unwrap_or_else(|| preferred_model().to_string());
+    let mut wanted_model: String = installed_model().unwrap_or_else(|| preferred_model().to_string());
+    // A user's installed chat-model choice takes priority over the setup-time
+    // hardware recommendation. Never download a stale saved preference here.
+    if let Some(saved) = configured_chat_model() {
+        if ollama_has_model(&saved).await {
+            wanted_model = saved;
+        }
+    }
     {
         let mut s = status.lock().await;
         s.phase = "model".into();

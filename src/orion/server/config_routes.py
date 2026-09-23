@@ -175,6 +175,11 @@ async def update_config(req: ConfigUpdateRequest, request: Request) -> dict:
         request.app.state.config = config
 
     updates: dict[str, Any] = {}
+    if req.model is not None:
+        from orion.server.chat_models import model_purpose
+
+        if model_purpose(req.model) != "chat":
+            raise HTTPException(status_code=400, detail="Choose a chat model as the default. Vision and embedding models are used by their respective tools.")
     for field_name, dotted_key in _FIELD_TO_KEY.items():
         value = getattr(req, field_name)
         if value is None:

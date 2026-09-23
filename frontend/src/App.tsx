@@ -9,6 +9,7 @@ import { useAppStore } from './lib/store';
 import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri } from './lib/api';
 import { track, hashId } from './lib/analytics';
 import { useChannelNotifications } from './lib/useChannelNotifications';
+import { chooseChatModel, savedChatModel } from './lib/chatModels';
 
 export default function App() {
   useChannelNotifications();
@@ -53,31 +54,30 @@ export default function App() {
     // a one-shot fetch here was the root cause of "no model selected"
     // surviving well past the backend actually being ready.
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout>;
     const load = () => {
       // Use the model the backend is running (/v1/info), not whichever model
       // Ollama happens to list first. Picking m[0] sent qwen3.5:2b while the
       // backend ran qwen3.5:4b: worse answers, plus a model swap on every turn.
-      // The HUD has no model picker, so the backend is the source of truth.
-      Promise.all([fetchModels(), fetchServerInfo().catch(() => null)])
+      // Wait for both calls: a transient info failure must not select the
+      // first Ollama entry and leave a vision model selected for the session.
+      Promise.all([fetchModels(), fetchServerInfo()])
         .then(([m, info]) => {
           if (cancelled) return;
           setModels(m);
-          const backendModel = info?.model;
-          if (backendModel && m.some((x) => x.id === backendModel)) {
-            setSelectedModel(backendModel);
-          } else if (!selectedModel && m.length > 0) {
-            setSelectedModel(m[0].id);
-          }
+          setServerInfo(info);
+          setSelectedModel(chooseChatModel(m, info.model, savedChatModel()));
           setModelsLoading(false);
         })
         .catch(() => {
           if (cancelled) return;
-          setTimeout(load, 2000);
+          retryTimer = setTimeout(load, 2000);
         });
     };
     load();
     return () => {
       cancelled = true;
+      clearTimeout(retryTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

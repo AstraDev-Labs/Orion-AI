@@ -105,6 +105,7 @@ class ChatCompletionChunk(BaseModel):
 
 class ModelObject(BaseModel):
     id: str
+    purpose: str = "chat"
     object: str = "model"
     created: int = Field(default_factory=lambda: int(time.time()))
     owned_by: str = "orion"

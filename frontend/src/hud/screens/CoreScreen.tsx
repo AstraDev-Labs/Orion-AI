@@ -6,6 +6,7 @@ import { StreamingSpeechQueue, stripMarkdown } from '../../lib/voiceSpeech';
 import { LATTICE_NODES } from '../holo/lattice';
 import { getVoiceReplies } from '../../lib/voicePrefs';
 import { getBase } from '../../lib/api';
+import { ChatModelSelector } from '../ChatModelSelector';
 
 function genId() {
   return Math.random().toString(36).slice(2);
@@ -35,6 +36,7 @@ export function CoreScreen({
     [onStreamingChange],
   );
   const [content, setContent] = useState('');
+  const [chatError, setChatError] = useState('');
   // While a spoken reply plays, only the words already voiced are shown, so the
   // text never runs seconds ahead of the voice. null = show the full reply.
   const [voicedText, setVoicedText] = useState<string | null>(null);
@@ -115,6 +117,8 @@ export function CoreScreen({
     const spoken = fromMic || getVoiceReplies();
     const text = (override ?? input).trim();
     if (!text || streaming || inFlightRef.current) return;
+    if (!selectedModel) { setChatError('Select an installed chat model first.'); return; }
+    setChatError('');
     inFlightRef.current = true;
     if (override === undefined) setInput('');
     setContent('');
@@ -204,6 +208,9 @@ export function CoreScreen({
           /* skip malformed chunk */
         }
       }
+    } catch (e) {
+      setChatError(e instanceof Error ? e.message : 'The reply failed. Please try again.');
+      setVoicedText(null);
     } finally {
       if (firstChunkAt) {
         // Final figure: the engine's own token count when it reports one.
@@ -295,6 +302,7 @@ export function CoreScreen({
         <h1 style={{ fontSize: 'clamp(24px, 3vw, 40px)' }}>
           {streaming ? 'Thinking in the open' : 'Speak, or set a directive.'}
         </h1>
+        {chatError && <p role="alert" style={{ color: '#ffb4a8', fontSize: 14 }}>{chatError}</p>}
         {streaming && activityNote && !(voicedText || content) && (
           <div
             role="status"
@@ -427,7 +435,7 @@ export function CoreScreen({
                 fontFamily: 'var(--font-body)',
               }}
             />
-            <button className="holo-ghost-btn" onClick={() => void send()} disabled={streaming || !input.trim()}>
+            <button className="holo-ghost-btn" onClick={() => void send()} disabled={streaming || !selectedModel || !input.trim()}>
               {streaming ? 'Working…' : 'Commit'}
             </button>
           </div>
@@ -444,10 +452,7 @@ export function CoreScreen({
               color: 'var(--color-neutral-600)',
             }}
           >
-            <span style={{ color: 'var(--color-neutral-400)' }}>{selectedModel || 'no model selected'}</span>
-            <span>Research</span>
-            <span>Gestures</span>
-            <span style={{ marginLeft: 'auto', color: 'var(--color-accent)' }}>⏎ commit</span>
+            <ChatModelSelector disabled={streaming} />
           </div>
         </div>
       </div>

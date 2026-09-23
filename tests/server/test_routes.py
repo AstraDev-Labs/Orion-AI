@@ -169,7 +169,7 @@ class TestChatCompletions:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["choices"][0]["message"]["content"] == "Hello from agent"
+        assert data["choices"][0]["message"]["content"] == "Hello from server"
 
     def test_agent_with_conversation(self, client_with_agent):
         resp = client_with_agent.post(

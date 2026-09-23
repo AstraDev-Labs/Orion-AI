@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from orion.core.types import Message, Role
+from orion.server.chat_models import model_purpose
 from orion.server.models import (
     ChatCompletionChunk,
     ChatCompletionRequest,
@@ -106,7 +107,6 @@ def _generate_adaptive_social_reply(
 ) -> dict[str, Any]:
     """Generate a social reply, retrying malformed drafts before they reach the user."""
     messages = _to_messages(req.messages)
-    last_result: dict[str, Any] = {}
     for _ in range(3):
         result = engine.generate(
             messages,
@@ -114,12 +114,11 @@ def _generate_adaptive_social_reply(
             temperature=req.temperature,
             max_tokens=req.max_tokens,
         )
-        last_result = result
         problem = _social_reply_problem(str(result.get("content", "")), user_text)
         if problem is None:
             return result
         messages = _social_retry_messages(messages, problem)
-    return last_result
+    raise HTTPException(status_code=502, detail="The selected model could not produce a valid reply. Please retry or select another chat model.")
 
 
 def _retry_adaptive_social_reply(
@@ -127,7 +126,6 @@ def _retry_adaptive_social_reply(
 ) -> dict[str, Any]:
     """Regenerate after a streamed social draft has failed validation."""
     messages = _social_retry_messages(_to_messages(req.messages), problem)
-    last_result: dict[str, Any] = {}
     for _ in range(2):
         result = engine.generate(
             messages,
@@ -135,12 +133,11 @@ def _retry_adaptive_social_reply(
             temperature=req.temperature,
             max_tokens=req.max_tokens,
         )
-        last_result = result
         retry_problem = _social_reply_problem(str(result.get("content", "")), user_text)
         if retry_problem is None:
             return result
         messages = _social_retry_messages(messages, retry_problem)
-    return last_result
+    raise HTTPException(status_code=502, detail="The selected model could not produce a valid reply. Please retry or select another chat model.")
 
 
 def _model_is_available(engine, model: str) -> bool:
@@ -165,6 +162,14 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     engine = request.app.state.engine
     agent = getattr(request.app.state, "agent", None)
     model = request_body.model
+    if model_purpose(model) != "chat":
+        preferred = getattr(request.app.state, "model", "")
+        available = engine.list_models()
+        if preferred and model_purpose(preferred) == "chat" and preferred in available:
+            model = preferred
+            request_body.model = preferred
+        else:
+            raise HTTPException(status_code=400, detail="This model is for vision or embeddings. Select an installed chat model.")
 
     # Captured before anything below (system prompt, session recap, memory
     # context) mutates request_body.messages -- memory capture needs the
@@ -351,7 +356,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
 
     # An approval that was just executed only needs its result reported.
     conversational = not request_body.tools and (
-        approval_executed or is_conversational(raw_user_query)
+        short_social or approval_executed or is_conversational(raw_user_query)
     )
     if (
         conversational
@@ -523,7 +528,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         )
 
     # Non-streaming: use agent if available, otherwise direct engine call
-    if agent is not None:
+    if agent is not None and not short_social:
         return _handle_agent(agent, model, request_body, complexity_info)
 
     bus = getattr(request.app.state, "bus", None)
@@ -733,10 +738,10 @@ async def _handle_adaptive_social_stream(
             candidate_tokens.append(token)
     except Exception:
         logging.getLogger("orion.server").warning(
-            "Adaptive social reply stream failed; falling back to normal streaming",
+            "Adaptive social reply stream failed",
             exc_info=True,
         )
-        return None
+        raise HTTPException(status_code=502, detail="The model could not complete a reply. Please retry or select another chat model.")
 
     content = "".join(candidate_tokens)
     usage: dict[str, Any] = {}
@@ -749,12 +754,14 @@ async def _handle_adaptive_social_stream(
             result = await run_in_threadpool(
                 _retry_adaptive_social_reply, engine, model, req, problem, raw_user_query
             )
+        except HTTPException:
+            raise
         except Exception:
             logging.getLogger("orion.server").warning(
-                "Adaptive social reply retry failed; falling back to normal streaming",
+                "Adaptive social reply retry failed",
                 exc_info=True,
             )
-            return None
+            raise HTTPException(status_code=502, detail="The model could not complete a valid reply. Please retry or select another chat model.")
         content = str(result.get("content", ""))
         usage = result.get("usage", {})
         finish_reason = result.get("finish_reason", "stop")
@@ -1071,7 +1078,7 @@ async def list_models(request: Request) -> ModelListResponse:
         model_ids = await list_local_models()
 
     return ModelListResponse(
-        data=[ModelObject(id=mid) for mid in model_ids],
+        data=[ModelObject(id=mid, purpose=model_purpose(mid)) for mid in model_ids],
     )
 
 

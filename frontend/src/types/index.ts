@@ -158,6 +158,7 @@ export interface StreamState {
 
 export interface ModelInfo {
   id: string;
+  purpose?: 'chat' | 'vision' | 'embedding';
   object: string;
   created: number;
   owned_by: string;

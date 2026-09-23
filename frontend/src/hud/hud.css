@@ -10,6 +10,32 @@
 @import '@fontsource/lora/500.css';
 @import '@fontsource/lora/600.css';
 
+.holo-model-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--color-neutral-300);
+}
+.holo-model-picker select {
+  min-width: 0;
+  flex: 1;
+  max-width: 100%;
+  padding: 8px;
+  background: var(--color-bg);
+  color: var(--color-neutral-100);
+  border: 1px solid var(--color-neutral-600);
+  border-radius: 3px;
+}
+.holo-model-picker select:focus-visible { outline: 2px solid var(--color-accent-300); outline-offset: 2px; }
+.holo-model-picker select:disabled { opacity: .6; }
+.holo-model-picker [role="alert"], .holo-model-picker [role="status"] { flex-basis: 100%; }
+.holo-model-picker [role="alert"] { color: #ffb4a8; }
+
 .holo-root {
   --color-bg: #100e0b;
   --color-text: #f8f4f4;
