@@ -61,6 +61,62 @@ class _ThinkStub(BaseTool):
         )
 
 
+def test_action_claim_without_tool_evidence_is_not_returned():
+    engine = _make_engine_no_tools('Done, I verified the alarm in Clock.')
+    agent = OrchestratorAgent(engine, 'test-model', tools=[_CalculatorStub()], max_turns=3)
+    result = agent.run('Verify that the alarm is set')
+    assert 'could not verify' in result.content
+    assert 'Done' not in result.content
+    assert engine.generate.call_count == 2
+
+
+def test_structured_action_claim_without_evidence_is_rejected():
+    engine = _make_engine_no_tools('FINAL_ANSWER: I saved the document.')
+    agent = OrchestratorAgent(engine, 'test-model', tools=[_CalculatorStub()], mode='structured', max_turns=3)
+    assert 'could not verify' in agent.run('Save the document').content
+
+
+def test_file_action_also_requires_evidence():
+    engine = _make_engine_no_tools('I created the file.')
+    agent = OrchestratorAgent(engine, 'test-model', tools=[_CalculatorStub()], max_turns=3)
+    assert 'could not verify' in agent.run('Create the report file').content
+
+
+def test_lookup_success_does_not_hide_later_action_failure():
+    from orion.agents.orchestrator import _has_execution_evidence
+    assert not _has_execution_evidence([
+        ToolResult(tool_name='system_info', content='Current time', success=True),
+        ToolResult(tool_name='reminder', content='Registration failed', success=False),
+    ])
+
+
+def test_failed_tool_exposes_enabled_recovery_tools():
+    class FailingTool(_CalculatorStub):
+        def execute(self, **params):
+            return ToolResult(tool_name='calculator', content='Backend unavailable', success=False)
+
+    class RecoveryTool(_ThinkStub):
+        @property
+        def spec(self):
+            return ToolSpec(name='shell_exec', description='Run a shell command', parameters={})
+
+        def execute(self, **params):
+            return ToolResult(tool_name='shell_exec', content='Verified result: 4', success=True)
+
+    engine = _make_engine_with_tool_call(final_content='Cannot do it.')
+    engine.generate.side_effect = [
+        {'tool_calls': [{'name': 'calculator', 'arguments': '{}'}]},
+        {'tool_calls': [{'name': 'shell_exec', 'arguments': '{}'}]},
+        {'content': 'The verified result is 4.'},
+    ]
+    agent = OrchestratorAgent(engine, 'test-model', tools=[FailingTool(), RecoveryTool()], max_turns=4, max_tools_per_request=1)
+    result = agent.run('Run the calculator')
+    offered = engine.generate.call_args_list[1].kwargs.get('tools', [])
+    assert 'shell_exec' in {t['function']['name'] for t in offered}
+    assert result.content == 'The verified result is 4.'
+    assert result.tool_results[-1].success
+
+
 def _make_engine_no_tools(content: str = "Final answer.") -> MagicMock:
     """Engine that never returns tool calls."""
     engine = MagicMock()

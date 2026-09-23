@@ -102,6 +102,40 @@ def _streams_tool_calls(engine: Any, model: str) -> bool:
     return False
 
 
+def _requires_execution(text: str) -> bool:
+    """Imperative requests need observations, not an unsupported completion claim."""
+    return bool(re.match(
+        r"^\s*(?:(?:please|also|now)\s+)*(?:(?:can|could|would|will)\s+you\s+)?"
+        r"(?:set|create|open|launch|start|install|delete|remove|cancel|send|save|write|run|execute|verify|check)\b",
+        text, re.IGNORECASE,
+    ))
+
+
+_EXECUTION_POLICY = (
+    "Report actions only from tool evidence in this turn. A request, earlier assistant claim, "
+    "or proposed code is not evidence of execution. Distinguish the system a tool changed "
+    "from the app the user asked about. To verify, read the actual state. A launch request "
+    "is not proof of a visible window, a file write is not proof its contents are correct, "
+    "and a queued task is not proof it fired. Describe only the stage actually observed. "
+    "If a tool fails, try another available method for the same authorized task, including "
+    "code execution when appropriate. Respect permissions; never use code to bypass a denial. "
+    "A generated-tool proposal needs approval and is not a completed action."
+)
+
+
+def _has_execution_evidence(results: list[ToolResult]) -> bool:
+    observed = [r for r in results if r.tool_name not in {"think", "propose_new_tool"}]
+    # An earlier successful lookup must not conceal a later failed action.
+    return bool(observed and observed[-1].success)
+
+
+def _unverified_result(results: list[ToolResult]) -> str:
+    text = "I could not verify completion of your request."
+    if results:
+        text += " Tool result: " + results[-1].content
+    return text
+
+
 @AgentRegistry.register("orchestrator")
 class OrchestratorAgent(ToolUsingAgent):
     """Multi-turn agent that routes between tools and the LLM.
@@ -211,6 +245,10 @@ class OrchestratorAgent(ToolUsingAgent):
             sys_prompt = base_structured_prompt
 
         messages = self._build_messages(input, context, system_prompt=sys_prompt)
+        requires_execution = _requires_execution(input)
+        evidence_retry = False
+        if requires_execution:
+            messages.insert(0, Message(role=Role.SYSTEM, content=_EXECUTION_POLICY))
 
         all_tool_results: list[ToolResult] = []
         turns = 0
@@ -233,6 +271,12 @@ class OrchestratorAgent(ToolUsingAgent):
 
             # FINAL_ANSWER -> done
             if parsed["final_answer"]:
+                if requires_execution and not _has_execution_evidence(all_tool_results):
+                    if not evidence_retry and turns < self._max_turns and self._tools:
+                        evidence_retry = True
+                        messages.append(Message(role=Role.USER, content="No execution was verified. Use an available tool for the requested task before claiming completion. If it fails, inspect the error and try a supported recovery method."))
+                        continue
+                    parsed["final_answer"] = _unverified_result(all_tool_results)
                 self._emit_turn_end(turns=turns)
                 return AgentResult(
                     content=parsed["final_answer"],
@@ -307,36 +351,6 @@ class OrchestratorAgent(ToolUsingAgent):
                 tool_result = self._executor.execute(tool_call)
                 all_tool_results.append(tool_result)
 
-                # Speed optimization: bypass second LLM turn for successful action tools
-                if tool_result.success:
-                    action_tools = {"shell_exec", "play_music", "play_video", "obsidian_write_note"}
-                    if parsed["tool"] in action_tools:
-                        app_name = "the application"
-                        if parsed["tool"] == "shell_exec":
-                            cmd = arguments
-                            if "chrome" in cmd.lower():
-                                app_name = "Google Chrome"
-                            elif "edge" in cmd.lower() or "msedge" in cmd.lower():
-                                app_name = "Microsoft Edge"
-                            elif "notepad" in cmd.lower():
-                                app_name = "Notepad"
-                            else:
-                                app_name = "the command"
-                            content_ans = f"I have successfully executed the request and opened {app_name}, sir."
-                        elif parsed["tool"] == "play_music":
-                            content_ans = "Right away, sir. I have started the music playback."
-                        elif parsed["tool"] == "play_video":
-                            content_ans = "Understood. I have queued up the requested video for you, sir."
-                        else:
-                            content_ans = "I have successfully saved the note in your vault, sir."
-
-                        self._emit_turn_end(turns=turns)
-                        return AgentResult(
-                            content=content_ans,
-                            tool_results=all_tool_results,
-                            turns=turns,
-                        )
-
                 obs_content = tool_result.content.strip() if tool_result.content else "(tool executed successfully with no output)"
 
                 # After a successful tool call, nudge the model to wrap up
@@ -348,7 +362,7 @@ class OrchestratorAgent(ToolUsingAgent):
                         "If you need more information, use another tool."
                     )
                 else:
-                    observation = f"Observation: {obs_content}"
+                    observation = f"Observation: {obs_content}\nThe method failed. Inspect the error and try another available tool or write code for the same task. Do not bypass permissions or claim success."
 
                 messages.append(Message(role=Role.USER, content=observation))
 
@@ -368,6 +382,8 @@ class OrchestratorAgent(ToolUsingAgent):
                 continue
 
             # Neither -> treat content as final answer
+            if requires_execution and not _has_execution_evidence(all_tool_results):
+                content = _unverified_result(all_tool_results)
             self._emit_turn_end(turns=turns)
 
             import re
@@ -383,6 +399,11 @@ class OrchestratorAgent(ToolUsingAgent):
 
         # Max turns exceeded — synthesize an answer from tool results
         # instead of the useless "Maximum turns reached" message
+        if requires_execution:
+            detail = all_tool_results[-1].content if all_tool_results else "No execution result was recorded."
+            self._emit_turn_end(turns=turns, max_turns_exceeded=True)
+            return AgentResult(content="The task stopped before completion was verified. Last tool result: " + detail,
+                               tool_results=all_tool_results, turns=turns, metadata={"max_turns_exceeded": True})
         successful_results = [
             tr for tr in all_tool_results if tr.success and tr.content
         ]
@@ -537,6 +558,12 @@ class OrchestratorAgent(ToolUsingAgent):
         # continues to execute normally -- this narrows the menu, not the
         # kitchen.
         openai_tools = []
+        requires_execution = _requires_execution(input)
+        evidence_retry = False
+        recovery_offered = False
+        action_policy = Message(role=Role.SYSTEM, content=_EXECUTION_POLICY)
+        if requires_execution:
+            messages.insert(0, action_policy)
         if self._tools:
             try:
                 from orion.tools.tool_router import select_tools
@@ -570,7 +597,9 @@ class OrchestratorAgent(ToolUsingAgent):
         force_answer = False
 
         on_delta = kwargs.get("on_delta")
-        stream_turns = callable(on_delta) and _streams_tool_calls(self._engine, self._model)
+        # Action claims are held until tool evidence has been checked; otherwise
+        # an invented success could be spoken before the retry can retract it.
+        stream_turns = callable(on_delta) and not requires_execution and _streams_tool_calls(self._engine, self._model)
 
         for _turn in range(self._max_turns):
             turns += 1
@@ -623,6 +652,19 @@ class OrchestratorAgent(ToolUsingAgent):
 
             # No tool calls -> check continuation, then final answer
             if not raw_tool_calls:
+                observed = [r for r in all_tool_results if r.tool_name != "think"]
+                if requires_execution and not _has_execution_evidence(observed):
+                    if not evidence_retry and not out_of_time and not force_answer and turns < self._max_turns and openai_tools:
+                        evidence_retry = True
+                        messages.append(Message(role=Role.SYSTEM, content=(
+                            "There is no successful tool evidence for the requested action. "
+                            "Use a relevant tool now to execute or inspect the task. Do not claim "
+                            "it was done or verified, and do not invent a limitation without trying."
+                        )))
+                        continue
+                    content = _unverified_result(observed)
+                    self._emit_turn_end(turns=turns, content_length=len(content))
+                    return AgentResult(content=content, tool_results=all_tool_results, turns=turns)
                 streamed = result.get("content", "") if stream_turns else ""
                 content = self._check_continuation(result, messages)
                 if stream_turns and len(content) > len(streamed):
@@ -748,12 +790,36 @@ class OrchestratorAgent(ToolUsingAgent):
                     )
 
             this_turn = all_tool_results[-len(tool_calls):]
+            # Expand only after an execution failure. These are existing enabled
+            # tools and still run through the executor's capability/approval gates.
+            recoverable = any(not r.success and not re.search(
+                r"denied|not allowed|permission|approval|not run:|loop guard:", r.content, re.I
+            ) for r in this_turn)
+            if requires_execution and recoverable and not recovery_offered:
+                recovery_offered = True
+                recovery_names = {"shell_exec", "code_interpreter", "propose_new_tool", "desktop_control", "computer_control", "vision_capture"}
+                current = {t.get("function", {}).get("name", "") for t in openai_tools}
+                for tool in self._tools or []:
+                    if tool.spec.name in recovery_names and tool.spec.name not in current:
+                        openai_tools.append(tool.to_openai_function())
+                        if offered:
+                            offered.add(tool.spec.name)
+                messages.append(Message(role=Role.SYSTEM, content=(
+                    "The attempted method failed. Inspect its error and use the available recovery "
+                    "tools to discover another method for this same task. You may write and run code "
+                    "through an enabled execution tool, then read back the outcome. Do not retry "
+                    "blindly or install software without authorization. If no supported method works, "
+                    "state the concrete failure without claiming completion."
+                )))
             force_answer = bool(this_turn) and all(
                 not r.success and r.content.startswith(("Loop guard:", "Not run:")) for r in this_turn
             )
 
         # Max turns exceeded
         final_content = self._strip_think_tags(content) if content else ""
+        if requires_execution:
+            detail = all_tool_results[-1].content if all_tool_results else "No execution result was recorded."
+            final_content = "The task stopped before completion was verified. Last tool result: " + detail
         self._emit_turn_end(turns=turns, max_turns_exceeded=True)
         return AgentResult(
             content=final_content or "Maximum turns reached without a final answer.",

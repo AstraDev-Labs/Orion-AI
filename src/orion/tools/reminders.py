@@ -12,6 +12,7 @@ import json
 import platform
 import subprocess
 import uuid
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Any
 
@@ -57,6 +58,26 @@ def _escape_ps(text: str) -> str:
     return text.replace("'", "''")
 
 
+def _verify_task(task_name: str, when: str) -> tuple[bool, str]:
+    ok, xml = _run(["schtasks", "/query", "/tn", task_name, "/xml"])
+    if not ok:
+        return False, f"Task could not be read: {xml}"
+    try:
+        root = ET.fromstring(xml)
+        enabled = root.findtext(".//{*}Settings/{*}Enabled", "true").lower() != "false"
+        triggers = root.findall(".//{*}TimeTrigger")
+        matches = any(
+            t.findtext("{*}StartBoundary", "")[:19] == when[:19]
+            and t.findtext("{*}Enabled", "true").lower() != "false"
+            for t in triggers
+        )
+        if not enabled or not matches:
+            return False, "The task is disabled or its trigger does not match the requested time."
+        return True, "Enabled task and matching scheduled time read back from Windows Task Scheduler."
+    except ET.ParseError:
+        return False, "Windows returned an unreadable task definition."
+
+
 @ToolRegistry.register("reminder")
 class ReminderTool(BaseTool):
     """Create, list, and cancel scheduled reminders."""
@@ -68,9 +89,12 @@ class ReminderTool(BaseTool):
         return ToolSpec(
             name="reminder",
             description=(
-                "Set, list, or cancel a timed reminder. The reminder fires as a "
-                "desktop notification at the given date/time even if ORION isn't "
-                "running, via the OS task scheduler."
+                "Set, list, or cancel a timed reminder. The reminder launches an "
+                "Orion popup at the given date/time via the OS task scheduler. "
+                "It needs a signed-in Windows session and is not guaranteed while "
+                "the computer sleeps or is powered off. This creates an Orion popup reminder, "
+                "NOT a Windows Clock alarm. It will not appear in Clock. List reads back the "
+                "real scheduled tasks to verify them; never claim a Clock alarm was created."
             ),
             parameters={
                 "type": "object",
@@ -144,6 +168,8 @@ class ReminderTool(BaseTool):
             )
 
         reminder_id = uuid.uuid4().hex[:8]
+        if when <= datetime.now():
+            return ToolResult(tool_name="reminder", content="The requested time is in the past. No reminder was created.", success=False)
         task_name = f"{_TASK_PREFIX}{reminder_id}"
 
         # Write the popup as its own .ps1 file rather than inlining it into the
@@ -163,8 +189,9 @@ class ReminderTool(BaseTool):
         # (schtasks /sd is locale-sensitive and was failing on en-IN).
         iso_when = when.strftime("%Y-%m-%dT%H:%M:%S")
         register_cmd = (
+            "$ErrorActionPreference = 'Stop'; "
             "$action = New-ScheduledTaskAction -Execute 'powershell.exe' "
-            f'-Argument \'-WindowStyle Hidden -ExecutionPolicy Bypass -File "{script_path}"\'; '
+            f'-Argument \'-WindowStyle Hidden -ExecutionPolicy Bypass -File "{_escape_ps(str(script_path))}"\'; '
             f"$trigger = New-ScheduledTaskTrigger -Once -At ([datetime]'{iso_when}'); "
             f"Register-ScheduledTask -TaskName '{task_name}' -Action $action "
             "-Trigger $trigger -Force | Out-Null"
@@ -186,25 +213,31 @@ class ReminderTool(BaseTool):
         }
         _save(reminders)
 
+        verified, evidence = _verify_task(task_name, when.isoformat())
+
         return ToolResult(
             tool_name="reminder",
-            content=f"Reminder set for {when.strftime('%Y-%m-%d %H:%M')}: {message}",
-            success=True,
-            metadata={"reminder_id": reminder_id},
+            content=(f"Orion popup reminder for {when.strftime('%Y-%m-%d %H:%M')}: {message}. "
+                     f"{evidence} This is a Task Scheduler reminder, not a Windows Clock alarm. "
+                     "It requires a running, signed-in Windows session to display the popup; delivery is not guaranteed while asleep or powered off."),
+            success=verified,
+            metadata={"reminder_id": reminder_id, "backend": "windows_task_scheduler", "verified": verified},
         )
 
     def _list(self) -> ToolResult:
         reminders = _load()
         if not reminders:
             return ToolResult(tool_name="reminder", content="No reminders set.", success=True)
-        lines = [
-            f"[{rid}] {r['when']} — {r['message']}"
-            for rid, r in sorted(reminders.items(), key=lambda kv: kv[1]["when"])
-        ]
+        lines = ["Orion Task Scheduler reminders (not Windows Clock alarms):"]
+        for rid, r in sorted(reminders.items(), key=lambda kv: kv[1]["when"]):
+            verified, evidence = _verify_task(r["task_name"], r["when"])
+            r["verified"] = verified
+            lines.append(f"[{rid}] {r['when']} — {r['message']}. {evidence} A registered trigger is not proof that a popup was delivered.")
+        all_verified = all(r.get("verified", False) for r in reminders.values())
         return ToolResult(
             tool_name="reminder",
             content="\n".join(lines),
-            success=True,
+            success=all_verified,
             metadata={"reminders": reminders},
         )
 
@@ -217,7 +250,9 @@ class ReminderTool(BaseTool):
                 content=f"No reminder found with id '{reminder_id}'.",
                 success=False,
             )
-        _run(["schtasks", "/delete", "/tn", entry["task_name"], "/f"])
+        ok, detail = _run(["schtasks", "/delete", "/tn", entry["task_name"], "/f"])
+        if not ok:
+            return ToolResult(tool_name="reminder", content=f"Could not cancel reminder: {detail}", success=False)
         script_path = _SCRIPTS_DIR / f"{reminder_id}.ps1"
         script_path.unlink(missing_ok=True)
         del reminders[reminder_id]

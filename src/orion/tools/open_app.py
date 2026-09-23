@@ -254,6 +254,48 @@ def _resolve_start_menu_shortcut(app_name: str) -> Optional[str]:
 _START_APPS_CACHE: Optional[dict[str, str]] = None
 
 
+def _packaged_app_index() -> dict[str, str]:
+    """Discover launch identities and protocol names directly from manifests.
+
+    Get-StartApps can omit installed Store apps. Protocol names let names such
+    as Clock resolve without a hardcoded executable or app identity.
+    """
+    import json
+
+    script = """
+    $ErrorActionPreference = 'Stop'
+    $items = foreach ($p in Get-AppxPackage) {
+      try {
+        $m = $p | Get-AppxPackageManifest
+        foreach ($a in $m.Package.Applications.Application) {
+          $id = $p.PackageFamilyName + '!' + $a.Id
+          foreach ($n in @($p.Name, $a.VisualElements.DisplayName)) {
+            if ($n -and $n -notlike 'ms-resource:*') {
+              [pscustomobject]@{Name=[string]$n; AppID=$id}
+            }
+          }
+          foreach ($e in $a.Extensions.Extension) {
+            if ($e.Category -eq 'windows.protocol' -and $e.Protocol.Name) {
+              [pscustomobject]@{Name=([string]$e.Protocol.Name -replace '^ms-', ''); AppID=$id}
+            }
+          }
+        }
+      } catch { }
+    }
+    @($items) | ConvertTo-Json -Compress
+    """
+    try:
+        proc = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                              capture_output=True, text=True, timeout=20,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if proc.returncode != 0:
+            return {}
+        rows = json.loads(proc.stdout or "[]")
+        return {r["Name"].lower(): r["AppID"] for r in rows if r.get("Name") and r.get("AppID")}
+    except Exception:
+        return {}
+
+
 def _start_apps_index() -> dict[str, str]:
     """Map lower-cased app names to AppUserModelIDs via ``Get-StartApps``.
 
@@ -306,6 +348,10 @@ def _resolve_start_app(app_name: str) -> Optional[str]:
     matches = [(k, v) for k, v in index.items() if key in k]
     if matches:
         return min(matches, key=lambda kv: len(kv[0]))[1]
+    packages = _packaged_app_index()
+    index.update(packages)
+    if key in packages:
+        return packages[key]
     return None
 
 
@@ -599,17 +645,17 @@ def _launch_resolved(app_name: str, resolved: tuple[str, str], target: str) -> t
     kind, value = resolved
     if kind == "binary":
         subprocess.Popen([value, target] if target else [value])
-        suffix = f" and opened {target}" if target else ""
-        return True, f"Opened {app_name}{suffix}."
+        suffix = f" with target {target}" if target else ""
+        return True, f"Launch requested for {app_name}{suffix}. The window and target content have not been verified."
     if kind == "shortcut":
         if target:
             # `start "" "app.lnk" "arg"` forwards the argument to whatever the
             # shortcut points at, so a target still reaches the app even when
             # no executable could be resolved for it.
             subprocess.Popen(["cmd", "/c", "start", "", value, target], shell=False)
-            return True, f"Opened {app_name} with {target}."
+            return True, f"Launch requested for {app_name} with {target}. The window and target content have not been verified."
         os.startfile(value)  # type: ignore[attr-defined]
-        return True, f"Opened {app_name}."
+        return True, f"Launch requested for {app_name}. The window has not been verified."
 
     # Store/UWP app: the shell launches these by identity, with nowhere to put
     # an argument. A URL can still be honoured by handing it to the default
@@ -626,7 +672,7 @@ def _launch_resolved(app_name: str, resolved: tuple[str, str], target: str) -> t
             f"Opened {app_name}, but '{target}' could not be passed to a Store app — "
             "open it manually once launched."
         )
-    return True, f"Opened {app_name}."
+    return True, f"Launch requested for {app_name}. The window has not been verified."
 
 
 def _launch(app_name: str, target: str = "") -> tuple[bool, str]:
@@ -704,9 +750,10 @@ def _launch(app_name: str, target: str = "") -> tuple[bool, str]:
         return True, f"Couldn't find '{app_name}' as an installed app — opened its website {result_url} instead."
 
     return False, (
-        f"'{app_name}' is not installed on this computer and no official website for it was "
-        "found. Nothing was opened. Ask the user whether to install it (install_app), search "
-        "the web for it, or whether they meant a different app."
+        f"Could not resolve or verify a launch for '{app_name}'. Nothing was opened by this method. "
+        "This does not prove it is uninstalled. Inspect installed packages or protocols with "
+        "an available execution tool and try a discovered launch identity; verify the result. "
+        "Only offer installation if discovery confirms it is missing."
     )
 
 
@@ -790,6 +837,26 @@ class OpenAppTool(BaseTool):
                 return ToolResult(tool_name="open_app", content=msg, success=ok)
 
             ok, msg = _launch(app_name, target)
+            if ok and msg.startswith("Launch requested"):
+                # Shell activation returning successfully is only an accepted
+                # request. Read visible window titles before claiming opened.
+                names = {app_name.casefold().strip(), os.path.splitext(_normalize(app_name))[0].casefold()}
+                visible = False
+                for _ in range(3):
+                    try:
+                        visible = any(name and name in title.casefold() for name in names for title in _snapshot_window_titles())
+                    except Exception:
+                        break
+                    if visible:
+                        break
+                    time.sleep(0.5)
+                if not visible:
+                    return ToolResult(tool_name="open_app", success=False,
+                        content=msg + " No matching visible window was observed yet. The app may use a different title or still be starting. Inspect desktop state before retrying; do not assume it is missing.",
+                        metadata={"launch_requested": True, "window_verified": False})
+                return ToolResult(tool_name="open_app", success=True,
+                    content=f"A visible window matching {app_name} was observed. " + ("The target content inside the window has not been verified." if target else ""),
+                    metadata={"launch_requested": True, "window_verified": True})
             return ToolResult(tool_name="open_app", content=msg, success=ok)
         except Exception as exc:
             label = file_name or app_name
