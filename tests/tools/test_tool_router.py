@@ -64,6 +64,23 @@ class TestSelection:
         sel = _names(select_tools(catalogue, "Send a message to Sanjay on WhatsApp", max_tools=4))
         assert "queue_action" in sel
 
+    def test_named_notion_write_beats_obsidian_and_browser_tools(self):
+        # Isolate lexical ranking from registry fixtures, which intentionally
+        # clear global registries between unit tests.
+        tools = [
+            _tool("notion_create_page", "Create a new page in Notion."),
+            _tool("notion_search_pages", "Search Notion pages."),
+            _tool("notion_get_page", "Read a Notion page."),
+            _tool("obsidian_write_note", "Write a note into the vault."),
+            _tool("obsidian_search_notes", "Search notes in the vault."),
+            _tool("open_app", "Open an application or website."),
+            _tool("web_search", "Search the web."),
+        ]
+        # Add enough unrelated tools to exercise the capped router path.
+        tools.extend(_tool(f"unrelated_{i}", "Manage local desktop settings.") for i in range(12))
+        selected = _names(select_tools(tools, "Save this to Notion as a new page", max_tools=6))
+        assert selected[0] == "notion_create_page"
+
     def test_respects_max_tools(self, catalogue):
         assert len(select_tools(catalogue, "anything at all", max_tools=3)) <= 3
 

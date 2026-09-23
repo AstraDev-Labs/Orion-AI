@@ -55,6 +55,7 @@ class Connection:
     category: str
     unlocks: str
     kind: str  # "credentials" | "connector" | "oauth" | "whatsapp"
+    capabilities: Tuple[str, ...] = ()
     fields: Tuple[Field, ...] = ()
     setup_url: str = ""
     setup_steps: str = ""
@@ -276,6 +277,7 @@ CATALOG: Tuple[Connection, ...] = (
         name="Email",
         category="Messaging & email",
         unlocks="Send emails you approve, and (for Gmail) read and search your inbox -- one login.",
+        capabilities=("Draft email for your approval", "Search recent Gmail messages when Gmail IMAP is configured"),
         kind="credentials",
         store="email",
         fields=(
@@ -299,6 +301,7 @@ CATALOG: Tuple[Connection, ...] = (
         name="WhatsApp",
         category="Messaging & email",
         unlocks="Message contacts and auto-reply while you're away.",
+        capabilities=("Draft direct messages for your approval", "WhatsApp bridge status and away replies"),
         kind="whatsapp",
     ),
     Connection(
@@ -306,6 +309,7 @@ CATALOG: Tuple[Connection, ...] = (
         name="Telegram",
         category="Messaging & email",
         unlocks="Chat with Orion and get notifications through your own Telegram bot.",
+        capabilities=("Chat through the running bot", "Send notifications"),
         kind="credentials",
         store="telegram",
         fields=(
@@ -328,6 +332,7 @@ CATALOG: Tuple[Connection, ...] = (
         name="Discord",
         category="Messaging & email",
         unlocks="Chat with Orion through your own Discord bot.",
+        capabilities=("Draft channel messages for your approval when the Discord bot is running",),
         kind="credentials",
         store="discord",
         fields=(
@@ -361,6 +366,7 @@ CATALOG: Tuple[Connection, ...] = (
         name="Web search (Tavily)",
         category="Knowledge & search",
         unlocks="Better live web results. Without a key Orion falls back to DuckDuckGo.",
+        capabilities=("Search current web results; DuckDuckGo remains the fallback",),
         kind="credentials",
         store="web_search",
         fields=(Field("TAVILY_API_KEY", "API key", secret=True, placeholder="tvly-..."),),
@@ -375,6 +381,7 @@ CATALOG: Tuple[Connection, ...] = (
         name="Obsidian vault",
         category="Knowledge & search",
         unlocks="Search and write notes in your vault.",
+        capabilities=("Search vault notes", "Create or append notes"),
         kind="connector",
         store="obsidian.json",
         fields=(Field("vault_path", "Vault folder", placeholder=r"C:\Users\you\Documents\MyVault"),),
@@ -385,7 +392,8 @@ CATALOG: Tuple[Connection, ...] = (
         id="notion",
         name="Notion",
         category="Knowledge & search",
-        unlocks="Search your Notion pages.",
+        unlocks="Search and read shared pages, and create pages under a shared parent page.",
+        capabilities=("Search shared pages", "Read page content", "Create a page under a shared parent"),
         kind="connector",
         store="notion.json",
         fields=(Field("token", "Integration secret", secret=True, placeholder="ntn_..."),),
@@ -398,6 +406,7 @@ CATALOG: Tuple[Connection, ...] = (
         name="GitHub",
         category="Knowledge & search",
         unlocks="Read your GitHub notifications.",
+        capabilities=("Read GitHub notifications",),
         kind="connector",
         store="github.json",
         fields=(Field("token", "Personal access token", secret=True, placeholder="github_pat_..."),),
@@ -410,6 +419,7 @@ CATALOG: Tuple[Connection, ...] = (
         name="Weather",
         category="Knowledge & search",
         unlocks="Current weather and forecasts for your city.",
+        capabilities=("Fetch current conditions and the short forecast for the saved city",),
         kind="connector",
         store="weather.json",
         fields=(
@@ -635,6 +645,19 @@ def _whatsapp_live_status() -> str:
         return "unknown"
 
 
+def _live_channel_status(name: str) -> str:
+    """Status of a runtime bot channel, separate from its saved bot token."""
+    try:
+        from orion.channels.live import get_live_channel
+
+        channel = get_live_channel(name)
+        if channel is None:
+            return "not_configured"
+        return str(channel.status().value)
+    except Exception:
+        return "unknown"
+
+
 def _oauth_connected(conn: Connection) -> bool:
     from orion.core.registry import ConnectorRegistry
 
@@ -686,13 +709,18 @@ def describe(conn: Connection) -> Dict[str, Any]:
             }
         )
     configured = all(values.get(f.key) for f in conn.fields if f.required) if conn.fields else False
-    status = "connected" if configured else "not_connected"
+    # A saved key is configuration, not proof that the provider is reachable
+    # or that a runtime channel is online. Keep that distinction visible.
+    status = "configured" if configured else "not_connected"
     extra: Dict[str, Any] = {}
     if conn.kind == "whatsapp":
         # No saved fields to judge by: WhatsApp is connected exactly when the
         # live bridge says so. Using the field check made this card read
         # "Not connected" right above the pairing panel saying "Connected".
         status = "connected" if _whatsapp_live_status() == "connected" else "not_connected"
+    elif conn.id in {"telegram", "discord", "slack"}:
+        channel_status = _live_channel_status(conn.id)
+        status = "connected" if channel_status == "connected" else ("configured" if configured else "not_connected")
     if conn.kind == "oauth":
         from orion.connectors.oauth import shipped_client
 
@@ -715,6 +743,7 @@ def describe(conn: Connection) -> Dict[str, Any]:
         "name": conn.name,
         "category": conn.category,
         "unlocks": conn.unlocks,
+        "capabilities": list(conn.capabilities),
         "kind": conn.kind,
         "fields": fields,
         "status": status,

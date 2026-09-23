@@ -286,7 +286,9 @@ export interface Connection {
   unlocks: string;
   kind: 'credentials' | 'connector' | 'oauth' | 'whatsapp';
   fields: ConnectionField[];
-  status: 'connected' | 'ready' | 'not_connected' | 'coming_soon';
+  status: 'connected' | 'configured' | 'ready' | 'not_connected' | 'coming_soon';
+  /** Actions implemented for this provider; credentials do not imply all work. */
+  capabilities: string[];
   /** Non-empty = listed but not usable yet; explains why. */
   coming_soon?: string;
   setup_url: string;

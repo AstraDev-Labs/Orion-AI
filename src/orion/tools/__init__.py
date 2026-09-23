@@ -164,6 +164,16 @@ except ImportError:
     pass
 
 try:
+    import orion.tools.notion_tools  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import orion.tools.connected_service_tools  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import orion.tools.play_music  # noqa: F401
 except ImportError:
     pass

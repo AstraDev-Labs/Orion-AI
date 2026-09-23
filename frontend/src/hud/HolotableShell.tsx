@@ -154,11 +154,15 @@ function VitalsPanel() {
 
 function ConduitsPanel({ onOpen }: { onOpen: () => void }) {
   const [status, setStatus] = useState('');
-  const [linked, setLinked] = useState<{ connected: number; total: number } | null>(null);
+  const [linked, setLinked] = useState<{ configured: number; live: number; total: number } | null>(null);
   useEffect(() => {
     fetchConnections()
       .then((d) =>
-        setLinked({ connected: d.connections.filter((c) => c.status === 'connected').length, total: d.connections.length }),
+        setLinked({
+          configured: d.connections.filter((c) => c.status === 'connected' || c.status === 'configured').length,
+          live: d.connections.filter((c) => c.status === 'connected').length,
+          total: d.connections.length,
+        }),
       )
       .catch(() => {});
   }, []);
@@ -190,7 +194,7 @@ function ConduitsPanel({ onOpen }: { onOpen: () => void }) {
         style={{ width: '100%', marginTop: 8, fontSize: 10.5, display: 'flex', justifyContent: 'space-between' }}
       >
         <span>Connections</span>
-        <span>{linked ? `${linked.connected} / ${linked.total}` : '→'}</span>
+        <span>{linked ? `${linked.configured} set · ${linked.live} live` : '→'}</span>
       </button>
     </div>
   );

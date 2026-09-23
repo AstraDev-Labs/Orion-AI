@@ -75,12 +75,16 @@ class WeatherConnector(BaseConnector):
             self._token_path.unlink()
 
     def sync(
-        self, *, since: Optional[datetime] = None, cursor: Optional[str] = None
+        self,
+        *,
+        since: Optional[datetime] = None,
+        cursor: Optional[str] = None,
+        location_override: str = "",
     ) -> Iterator[Document]:
         """Yield Documents for current weather and forecast."""
         config = self._load_config()
         api_key = config["api_key"]
-        location = config.get("location", "San Francisco,US")
+        location = location_override.strip() or config.get("location", "San Francisco,US")
         units, temp_unit, wind_unit = _units_for(location)
 
         # Current weather

@@ -32,12 +32,14 @@ function StatusPill({ conn }: { conn: Connection }) {
     : waiting
     ? 'Signing in…'
     : conn.status === 'connected'
-      ? '● Connected'
+      ? '● Live'
+      : conn.status === 'configured'
+        ? 'Credentials saved'
       : conn.status === 'ready'
         ? 'Ready to sign in'
         : 'Not connected';
   const color =
-    conn.status === 'connected' ? 'var(--color-accent-300)' : waiting || conn.status === 'ready' ? 'var(--color-accent-400)' : 'var(--color-neutral-600)';
+    conn.status === 'connected' ? 'var(--color-accent-300)' : conn.status === 'configured' || waiting || conn.status === 'ready' ? 'var(--color-accent-400)' : 'var(--color-neutral-600)';
   return (
     <span style={{ flexShrink: 0, fontSize: 9.5, letterSpacing: '0.14em', textTransform: 'uppercase', color }}>{label}</span>
   );
@@ -123,7 +125,8 @@ function ConnectionCard({
     });
 
   const connected = conn.status === 'connected';
-  const showForm = !connected || editing;
+  const configured = connected || conn.status === 'configured';
+  const showForm = !configured || editing;
   // The first non-secret value identifies the account ("you@gmail.com").
   const identity = conn.fields.find((f) => !f.secret && f.value)?.value;
   const requiredMissing = conn.fields.some((f) => f.required && !f.set && !(values[f.key] || '').trim());
@@ -184,12 +187,20 @@ function ConnectionCard({
           <div style={{ fontSize: 13, color: 'var(--color-neutral-300)' }}>
             {identity ? (
               <>
-                Connected as <span style={{ color: 'var(--color-accent-300)' }}>{identity}</span>
-              </>
-            ) : (
-              'Connected. Saved keys are kept on this computer and never shown again.'
-            )}
+              {connected ? 'Live as ' : 'Credentials saved for '}
+              <span style={{ color: 'var(--color-accent-300)' }}>{identity}</span>
+            </>
+          ) : (
+            connected
+              ? 'The provider runtime is connected. Saved keys are kept on this computer and never shown again.'
+              : 'Credentials are saved on this computer. This does not by itself confirm the provider is online.'
+          )}
           </div>
+          {!!conn.capabilities?.length && (
+            <div style={{ fontSize: 12, color: 'var(--color-neutral-500)' }}>
+              Orion actions: {conn.capabilities.join(' · ')}
+            </div>
+          )}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {conn.can_verify && (
               <button type="button" className="holo-ghost-btn" onClick={() => void verify()} disabled={!!busy}>
@@ -340,12 +351,12 @@ function ConnectionCard({
                 {conn.oauth?.state === 'waiting' ? 'Waiting for browser…' : connected ? 'Sign in again' : 'Sign in'}
               </button>
             )}
-            {connected && (
+            {configured && (
               <button type="button" className="holo-ghost-btn" onClick={() => setEditing(false)} disabled={!!busy}>
                 Cancel
               </button>
             )}
-            {!connected && conn.status === 'ready' && (
+            {!configured && conn.status === 'ready' && (
               <button
                 type="button"
                 onClick={() => void disconnect()}
@@ -426,7 +437,8 @@ export function ConnectionsScreen() {
     );
   }, [items]);
 
-  const connectedCount = items?.filter((c) => c.status === 'connected').length ?? 0;
+  const configuredCount = items?.filter((c) => c.status === 'connected' || c.status === 'configured').length ?? 0;
+  const liveCount = items?.filter((c) => c.status === 'connected').length ?? 0;
 
   const restart = async () => {
     setRestarting(true);
@@ -450,7 +462,7 @@ export function ConnectionsScreen() {
           <span>Conduits · 12</span>
           {items && (
             <span style={{ color: 'var(--color-accent-300)' }}>
-              {connectedCount} / {items.length} connected
+              {configuredCount} / {items.length} configured · {liveCount} live
             </span>
           )}
         </div>

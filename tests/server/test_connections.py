@@ -61,7 +61,8 @@ def test_save_verifies_and_never_returns_secret(client):
     ).json()
     assert res["saved"] and res["ok"] and res["message"] == "verified ok"
     email = _conn(client, "email")
-    assert email["status"] == "connected"
+    assert email["status"] == "configured"
+    assert email["capabilities"]
     fields = {f["key"]: f for f in email["fields"]}
     assert fields["EMAIL_USERNAME"]["value"] == "me@gmail.com"
     assert fields["EMAIL_PASSWORD"] == {**fields["EMAIL_PASSWORD"], "set": True, "value": ""}
@@ -100,7 +101,7 @@ def test_connector_json_storage_and_disconnect(client, tmp_path):
     assert res["saved"]
     path = tmp_path / "connectors" / "github.json"
     assert '"token": "ghp_123"' in path.read_text(encoding="utf-8")
-    assert _conn(client, "github")["status"] == "connected"
+    assert _conn(client, "github")["status"] == "configured"
     assert client.delete("/v1/connections/github").json()["ok"]
     assert not path.exists() and _conn(client, "github")["status"] == "not_connected"
 

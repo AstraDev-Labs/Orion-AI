@@ -47,6 +47,8 @@ def _notion_api_search(
     token: str,
     *,
     cursor: Optional[str] = None,
+    query: str = "",
+    page_size: int = 100,
 ) -> Dict[str, Any]:
     """Call the Notion ``/v1/search`` endpoint to list accessible pages.
 
@@ -64,8 +66,10 @@ def _notion_api_search(
     """
     body: Dict[str, Any] = {
         "filter": {"property": "object", "value": "page"},
-        "page_size": 100,
+        "page_size": min(max(int(page_size), 1), 100),
     }
+    if query.strip():
+        body["query"] = query.strip()
     if cursor:
         body["start_cursor"] = cursor
 
@@ -73,6 +77,43 @@ def _notion_api_search(
         f"{_NOTION_API_BASE}/search",
         headers=_notion_headers(token),
         json=body,
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _notion_api_create_page(
+    token: str, *, parent_page_id: str, title: str, content: str
+) -> Dict[str, Any]:
+    """Create a child page under an explicitly shared Notion page."""
+    chunks = [content[i : i + 2000] for i in range(0, len(content), 2000)]
+    children = [
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {"rich_text": [{"type": "text", "text": {"content": chunk}}]},
+        }
+        for chunk in chunks
+    ]
+    resp = httpx.post(
+        f"{_NOTION_API_BASE}/pages",
+        headers=_notion_headers(token),
+        json={
+            "parent": {"page_id": parent_page_id},
+            "properties": {"title": {"title": [{"type": "text", "text": {"content": title}}]}},
+            "children": children,
+        },
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _notion_api_get_page(token: str, page_id: str) -> Dict[str, Any]:
+    resp = httpx.get(
+        f"{_NOTION_API_BASE}/pages/{page_id}",
+        headers=_notion_headers(token),
         timeout=30.0,
     )
     resp.raise_for_status()
